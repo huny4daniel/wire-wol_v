@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- WireWOL 컴패니언은 같은 LAN(또는 WireGuard 터널)에서 평범한 http(TLS 없음)로만
+     떠 있으므로, Android 9+ 기본값인 cleartext 차단을 여기서 허용해야 한다. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

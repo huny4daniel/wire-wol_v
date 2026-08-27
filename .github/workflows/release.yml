@@ -1,0 +1,132 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: 의존성 설치
+        run: |
+          pip install pyinstaller Flask qrcode Pillow pystray pywin32
+
+      - name: exe 빌드
+        working-directory: windows
+        run: |
+          python -m PyInstaller `
+            --onefile `
+            --windowed `
+            --icon "assets/tray_icon.ico" `
+            --add-data "assets/tray_icon.ico;." `
+            --name "WireWOL_${{ github.ref_name }}" `
+            "wirewol.pyw"
+
+      - name: exe 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: windows/dist/WireWOL_${{ github.ref_name }}.exe
+
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: JDK 설치
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          # 릴리즈 키스토어를 로컬 JDK 21(keytool)로 만들었다면 CI가 JDK 17로
+          # 읽을 때 "Tag number over 30 is not supported" 오류가 날 수 있다
+          # (PKCS12 인코딩이 JDK 버전마다 미묘하게 달라서 생기는 문제,
+          # mobile-hub-viewer_v에서 실제로 겪음) — 키스토어를 만든 쪽과 같은
+          # 메이저 버전으로 맞춘다.
+          java-version: '21'
+
+      - name: Android SDK 설치
+        uses: android-actions/setup-android@v3
+
+      - name: 릴리즈 서명 키 복원
+        working-directory: android
+        run: |
+          mkdir -p keystore
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > keystore/release.keystore
+
+      - name: apk 빌드
+        working-directory: android
+        run: |
+          ./gradlew assembleRelease --no-daemon \
+            -PreleaseVersionName=${{ github.ref_name }} \
+            -PreleaseKeystorePath=keystore/release.keystore \
+            -PreleaseKeystorePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
+            -PreleaseKeyAlias=${{ secrets.ANDROID_KEY_ALIAS }} \
+            -PreleaseKeyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: apk 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+
+  release:
+    needs: [build-windows, build-android]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: exe 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-exe
+          path: dist
+
+      - name: apk 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: dist
+
+      - name: 아티팩트 이름 정리
+        run: mv dist/app-release.apk "dist/WireWOLAndroid_${{ github.ref_name }}.apk"
+
+      - name: 같은 부버전 기존 릴리즈 삭제
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          # v1.2.3 → 1.2 (major.minor 추출)
+          MINOR=$(echo "$TAG" | sed 's/^v//' | cut -d. -f1-2)
+
+          gh release list --repo ${{ github.repository }} --limit 100 \
+            --json tagName --jq '.[].tagName' | while read t; do
+            TM=$(echo "$t" | sed 's/^v//' | cut -d. -f1-2)
+            if [ "$TM" = "$MINOR" ] && [ "$t" != "$TAG" ]; then
+              echo "기존 릴리즈 삭제: $t"
+              gh release delete "$t" --yes --repo ${{ github.repository }}
+            fi
+          done
+
+      - name: 릴리즈 생성 및 exe/apk 첨부
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: |
+            dist/WireWOL_${{ github.ref_name }}.exe
+            dist/WireWOLAndroid_${{ github.ref_name }}.apk

@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ww_background"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/backButton"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/back"
+                android:textAllCaps="false"
+                android:textColor="@color/ww_hint" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="@string/settings_title"
+                android:textColor="@color/ww_text"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <!-- backButton과 좌우 대칭을 맞추기 위한 자리 채움용 빈 뷰 -->
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/scanPairingButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:backgroundTint="@color/ww_surface"
+            android:text="@string/scan_pairing"
+            android:textAllCaps="false"
+            android:textColor="@color/ww_text" />
+
+        <TextView
+            android:id="@+id/scanPairingStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginStart="4dp"
+            android:textColor="@color/ww_hint"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/editMacButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="@color/ww_surface"
+            android:text="@string/edit_mac"
+            android:textAllCaps="false"
+            android:textColor="@color/ww_text" />
+
+        <TextView
+            android:id="@+id/editMacStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginStart="4dp"
+            android:textColor="@color/ww_hint"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/scanWireGuardButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="@color/ww_surface"
+            android:text="@string/wireguard_scan_button"
+            android:textAllCaps="false"
+            android:textColor="@color/ww_text" />
+
+        <TextView
+            android:id="@+id/scanWireGuardStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginStart="4dp"
+            android:textColor="@color/ww_hint"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/routerWolSettingsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="@color/ww_surface"
+            android:text="@string/router_wol_open_settings"
+            android:textAllCaps="false"
+            android:textColor="@color/ww_text" />
+
+        <TextView
+            android:id="@+id/routerWolStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginStart="4dp"
+            android:textColor="@color/ww_hint"
+            android:textSize="12sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="4dp"
+            android:background="@color/ww_surface" />
+
+        <Button
+            android:id="@+id/clearAllButton"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/clear_all"
+            android:textAllCaps="false"
+            android:textColor="@color/ww_accent_red" />
+
+    </LinearLayout>
+</ScrollView>

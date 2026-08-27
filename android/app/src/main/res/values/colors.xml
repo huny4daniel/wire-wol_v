@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ww_background">#0e0e0e</color>
+    <color name="ww_surface">#1a1a1a</color>
+    <color name="ww_text">#ffffff</color>
+    <color name="ww_hint">#8a8a8a</color>
+    <color name="ww_accent">#4d7fd6</color>
+    <color name="ww_accent_green">#3f9d5a</color>
+    <color name="ww_accent_red">#c44d4d</color>
+</resources>

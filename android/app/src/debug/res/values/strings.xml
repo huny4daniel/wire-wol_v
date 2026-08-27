@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 정식 릴리즈와 같이 깔려있어도 앱 서랍에서 헷갈리지 않도록 이름만 겹쳐쓴다. -->
+    <string name="app_name">WireWOL (테스트)</string>
+</resources>
