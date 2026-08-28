@@ -91,6 +91,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.2")
+    // 앱 전체(모든 액티비티)가 백그라운드로 가는/돌아오는 시점을 감지하기 위한
+    // ProcessLifecycleOwner — 액티비티별 onStart/onStop만으로는 화면 전환과
+    // 실제 백그라운드 진입을 구분할 수 없다.
+    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     implementation("com.google.android.material:material:1.12.0")
     // QR 스캔 — 카메라 미리보기/권한 요청까지 내장된 액티비티를 그대로 씀.
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

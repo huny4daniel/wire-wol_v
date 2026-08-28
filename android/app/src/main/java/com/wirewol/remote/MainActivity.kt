@@ -30,7 +30,9 @@ import java.util.Date
  *
  * 와이어가드는 하나의 토글 버튼이 아니라 PC 켜기/끄기처럼 켜기·끄기 버튼을
  * 따로 둔다 — 리모컨의 다른 버튼들과 마찬가지로 사용자가 누른 상태를 그대로
- * 유지한다(onStart/onStop에 걸어 자동으로 올리고 내리지 않음).
+ * 유지한다(이 액티비티의 onStart/onStop에 걸어 자동으로 올리고 내리지 않음).
+ * 앱 전체가 백그라운드로 가면/돌아오면 켜고 끄는 것은 [WireWolApplication]이
+ * 담당한다.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -95,6 +97,10 @@ class MainActivity : AppCompatActivity() {
         // 설정 화면에서 연결 정보/WireGuard/MAC을 바꾸고 돌아왔을 수 있으니
         // 매번 다시 읽는다.
         updateStatus()
+        // 앱이 백그라운드에 있는 동안 꺼뒀던 와이어가드를 WireWolApplication이
+        // 지금 막 비동기로 되살리는 중일 수 있다 — 그 결과를 놓치지 않도록
+        // 잠깐 뒤에 와이어가드 상태만 한 번 더 확인한다.
+        handler.postDelayed({ refreshWireGuardStatus() }, WIREGUARD_STATUS_RECHECK_DELAY_MS)
     }
 
     private fun updateStatus() {
@@ -108,14 +114,18 @@ class MainActivity : AppCompatActivity() {
         val mac = pairingConfig.loadMac()
         statusMacText.text = if (mac.isNotBlank()) getString(R.string.status_mac, mac) else getString(R.string.status_mac_missing)
 
+        refreshWireGuardStatus()
+
+        checkPowerStatus(pairing)
+        updatePendingShutdownStatus()
+    }
+
+    private fun refreshWireGuardStatus() {
         statusWireGuardText.text = when {
             !wireGuard.hasConfig() -> getString(R.string.status_wireguard_missing)
             wireGuard.isUp() -> getString(R.string.status_wireguard_up)
             else -> getString(R.string.status_wireguard_down)
         }
-
-        checkPowerStatus(pairing)
-        updatePendingShutdownStatus()
     }
 
     // PC 전원 상태 표시 — 네트워크 종류를 따지지 않고 컴패니언 서버에 곧장
@@ -387,5 +397,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val QUICK_SHUTDOWN_SECONDS = 10
         private const val KEY_PENDING_SHUTDOWN = "pending_shutdown_at"
+        private const val WIREGUARD_STATUS_RECHECK_DELAY_MS = 1200L
     }
 }
