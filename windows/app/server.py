@@ -13,8 +13,6 @@ import subprocess
 
 from flask import Flask, request, jsonify
 
-from . import autologin
-
 DEFAULT_SHUTDOWN_DELAY_SECONDS = 10
 MAX_SHUTDOWN_DELAY_SECONDS = 24 * 60 * 60
 
@@ -104,32 +102,6 @@ def create_app(config) -> Flask:
             subprocess.run(['shutdown', '/a'], check=True, creationflags=_NO_WINDOW)
         except (subprocess.CalledProcessError, FileNotFoundError):
             return jsonify(error='예약된 종료가 없습니다'), 400
-        return jsonify(ok=True)
-
-    @app.route('/api/autologin', methods=['POST'])
-    def set_autologin():
-        """부팅 시 자동 로그인(AutoAdminLogon) 설정 — 이미 잠긴 화면을 원격으로
-        푸는 기능이 아니라(Windows 보안 구조상 불가능), 재부팅 시 로그인 화면
-        자체를 건너뛰게 하는 Windows 자체 기능을 켜고 끈다."""
-        body = request.get_json(silent=True) or {}
-        enabled = body.get('enable')
-        if enabled is True:
-            username = (body.get('username') or '').strip()
-            password = body.get('password') or ''
-            domain = (body.get('domain') or '').strip()
-            if not username or not password:
-                return jsonify(error='사용자 이름과 비밀번호를 입력해주세요'), 400
-            try:
-                autologin.enable(username, password, domain)
-            except OSError as e:
-                return jsonify(error=str(e)), 500
-        elif enabled is False:
-            try:
-                autologin.disable()
-            except OSError as e:
-                return jsonify(error=str(e)), 500
-        else:
-            return jsonify(error='enable 값이 필요합니다'), 400
         return jsonify(ok=True)
 
     return app

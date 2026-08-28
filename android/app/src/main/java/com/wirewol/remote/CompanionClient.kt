@@ -65,21 +65,6 @@ class CompanionClient {
     fun cancelShutdown(config: Config): Result =
         postCommand(config, "/api/shutdown/cancel", ByteArray(0).toRequestBody(null))
 
-    fun enableAutologin(config: Config, username: String, password: String, domain: String): Result {
-        val body = JSONObject().apply {
-            put("enable", true)
-            put("username", username)
-            put("password", password)
-            if (domain.isNotBlank()) put("domain", domain)
-        }.toString().toRequestBody("application/json".toMediaType())
-        return postCommand(config, "/api/autologin", body)
-    }
-
-    fun disableAutologin(config: Config): Result {
-        val body = JSONObject().put("enable", false).toString().toRequestBody("application/json".toMediaType())
-        return postCommand(config, "/api/autologin", body)
-    }
-
     private fun postCommand(config: Config, path: String, body: okhttp3.RequestBody): Result {
         return try {
             val request = Request.Builder()

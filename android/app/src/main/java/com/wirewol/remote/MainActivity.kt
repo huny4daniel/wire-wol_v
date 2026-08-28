@@ -1,5 +1,6 @@
 package com.wirewol.remote
 
+import android.app.TimePickerDialog
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -7,11 +8,8 @@ import android.net.VpnService
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.text.InputType
 import android.view.View
 import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +18,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.snackbar.Snackbar
 import java.text.DateFormat
+import java.util.Calendar
 import java.util.Date
 
 /**
@@ -82,6 +81,7 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.powerOnButton).setOnClickListener { onPowerOnClicked() }
         findViewById<Button>(R.id.powerOffButton).setOnClickListener { onPowerOffClicked() }
+        findViewById<Button>(R.id.scheduleShutdownButton).setOnClickListener { onScheduleShutdownClicked() }
         findViewById<Button>(R.id.wireGuardOnButton).setOnClickListener { onWireGuardOnClicked() }
         findViewById<Button>(R.id.wireGuardOffButton).setOnClickListener { onWireGuardOffClicked() }
         findViewById<Button>(R.id.settingsButton).setOnClickListener {
@@ -203,44 +203,58 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    // PC 끄기 — WireWOL 컴패니언(wirewol.pyw)에 종료 명령을 보낸다. 분을
-    // 비워두면 기존과 같이 10초 뒤 즉시 종료, 값을 입력하면 그만큼 뒤로 예약된
-    // 종료다. 어느 쪽이든 서버는 shutdown /t로 지연 종료를 걸어두므로, 그사이
-    // 취소할 수 있다(오조작으로 저장 안 된 작업이 날아가는 것을 막기 위한
-    // 안전장치 — mobile-hub-viewer_v의 종료 API와 동일한 이유).
+    // PC 끄기 — WireWOL 컴패니언(wirewol.pyw)에 종료 명령을 보낸다. 서버가
+    // 곧바로 끄지 않고 10초 지연 후 종료를 예약하므로, 그사이 Snackbar의
+    // "취소" 액션으로 되돌릴 수 있다(오조작으로 저장 안 된 작업이 날아가는
+    // 것을 막기 위한 안전장치 — mobile-hub-viewer_v의 종료 API와 동일한 이유).
     private fun onPowerOffClicked() {
         val pairing = pairingConfig.load()
         if (pairing == null) {
             Toast.makeText(this, R.string.pairing_missing, Toast.LENGTH_LONG).show()
             return
         }
-        val padding = (24 * resources.displayMetrics.density).toInt()
-        val minutesInput = EditText(this).apply {
-            hint = getString(R.string.shutdown_minutes_hint)
-            inputType = InputType.TYPE_CLASS_NUMBER
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(padding, padding / 2, padding, 0)
-            addView(minutesInput)
-        }
         AlertDialog.Builder(this)
             .setTitle(R.string.shutdown_confirm_title)
             .setMessage(R.string.shutdown_confirm_message)
-            .setView(container)
-            .setPositiveButton(R.string.shutdown_confirm_ok) { _, _ ->
-                val minutesText = minutesInput.text.toString().trim()
-                if (minutesText.isEmpty()) {
-                    requestShutdown(pairing, null)
-                    return@setPositiveButton
-                }
-                val minutes = minutesText.toIntOrNull()
-                if (minutes == null || minutes !in 1..1440) {
-                    Toast.makeText(this, R.string.shutdown_minutes_invalid, Toast.LENGTH_LONG).show()
-                    return@setPositiveButton
-                }
-                requestShutdown(pairing, minutes * 60)
-            }
+            .setPositiveButton(R.string.shutdown_confirm_ok) { _, _ -> requestShutdown(pairing, null) }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    // 예약 끄기 — 시(時):분(分)을 직접 골라서 그 시각에 PC가 꺼지도록 예약한다.
+    // 고른 시각이 이미 지났으면(예: 지금이 오후 11시인데 오전 9시를 고른 경우)
+    // 내일 그 시각으로 넘긴다.
+    private fun onScheduleShutdownClicked() {
+        val pairing = pairingConfig.load()
+        if (pairing == null) {
+            Toast.makeText(this, R.string.pairing_missing, Toast.LENGTH_LONG).show()
+            return
+        }
+        val now = Calendar.getInstance()
+        TimePickerDialog(
+            this,
+            { _, hour, minute -> confirmScheduleShutdown(pairing, hour, minute) },
+            now.get(Calendar.HOUR_OF_DAY),
+            now.get(Calendar.MINUTE),
+            android.text.format.DateFormat.is24HourFormat(this)
+        ).show()
+    }
+
+    private fun confirmScheduleShutdown(pairing: PairingConfig.Info, hour: Int, minute: Int) {
+        val now = Calendar.getInstance()
+        val target = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, minute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            if (!after(now)) add(Calendar.DAY_OF_MONTH, 1)
+        }
+        val delaySeconds = ((target.timeInMillis - now.timeInMillis) / 1000L).toInt()
+        val timeLabel = DateFormat.getTimeInstance(DateFormat.SHORT).format(target.time)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.schedule_shutdown_confirm_title)
+            .setMessage(getString(R.string.schedule_shutdown_confirm_message, timeLabel))
+            .setPositiveButton(R.string.schedule_shutdown_confirm_ok) { _, _ -> requestShutdown(pairing, delaySeconds) }
             .setNegativeButton(R.string.cancel, null)
             .show()
     }
