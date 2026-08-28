@@ -117,7 +117,7 @@
                 android:layout_width="0dp"
                 android:layout_height="64dp"
                 android:layout_marginEnd="6dp"
-                android:layout_weight="1"
+                android:layout_weight="8"
                 android:backgroundTint="@color/ww_accent_red"
                 android:text="@string/power_off"
                 android:textAllCaps="false"
@@ -130,12 +130,12 @@
                 android:layout_width="0dp"
                 android:layout_height="64dp"
                 android:layout_marginStart="6dp"
-                android:layout_weight="1"
+                android:layout_weight="2"
                 android:backgroundTint="@color/ww_surface"
                 android:text="@string/schedule_shutdown"
                 android:textAllCaps="false"
                 android:textColor="@color/ww_text"
-                android:textSize="16sp"
+                android:textSize="13sp"
                 android:textStyle="bold" />
         </LinearLayout>
 

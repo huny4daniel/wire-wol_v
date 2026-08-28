@@ -1,6 +1,5 @@
 package com.wirewol.remote
 
-import android.app.TimePickerDialog
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -8,8 +7,11 @@ import android.net.VpnService
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
 import android.view.View
 import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.NumberPicker
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,7 +20,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.snackbar.Snackbar
 import java.text.DateFormat
-import java.util.Calendar
 import java.util.Date
 
 /**
@@ -221,40 +222,55 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // 예약 끄기 — 시(時):분(分)을 직접 골라서 그 시각에 PC가 꺼지도록 예약한다.
-    // 고른 시각이 이미 지났으면(예: 지금이 오후 11시인데 오전 9시를 고른 경우)
-    // 내일 그 시각으로 넘긴다.
+    // 예약 끄기 — 시각을 직접 고르는 대신, 타이머처럼 "몇 시간 몇 분 후"를
+    // 골라서 그만큼 뒤에 PC가 꺼지도록 예약한다.
     private fun onScheduleShutdownClicked() {
         val pairing = pairingConfig.load()
         if (pairing == null) {
             Toast.makeText(this, R.string.pairing_missing, Toast.LENGTH_LONG).show()
             return
         }
-        val now = Calendar.getInstance()
-        TimePickerDialog(
-            this,
-            { _, hour, minute -> confirmScheduleShutdown(pairing, hour, minute) },
-            now.get(Calendar.HOUR_OF_DAY),
-            now.get(Calendar.MINUTE),
-            android.text.format.DateFormat.is24HourFormat(this)
-        ).show()
-    }
-
-    private fun confirmScheduleShutdown(pairing: PairingConfig.Info, hour: Int, minute: Int) {
-        val now = Calendar.getInstance()
-        val target = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, hour)
-            set(Calendar.MINUTE, minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-            if (!after(now)) add(Calendar.DAY_OF_MONTH, 1)
+        val padding = (24 * resources.displayMetrics.density).toInt()
+        val hourPicker = NumberPicker(this).apply {
+            minValue = 0
+            maxValue = 23
+            value = 0
         }
-        val delaySeconds = ((target.timeInMillis - now.timeInMillis) / 1000L).toInt()
-        val timeLabel = DateFormat.getTimeInstance(DateFormat.SHORT).format(target.time)
+        val minutePicker = NumberPicker(this).apply {
+            minValue = 0
+            maxValue = 59
+            value = 30
+        }
+        val hourLabel = TextView(this).apply {
+            text = getString(R.string.schedule_shutdown_hours_label)
+            gravity = Gravity.CENTER
+            setPadding(padding / 4, 0, padding / 2, 0)
+        }
+        val minuteLabel = TextView(this).apply {
+            text = getString(R.string.schedule_shutdown_minutes_label)
+            gravity = Gravity.CENTER
+            setPadding(padding / 4, 0, 0, 0)
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(padding, padding / 2, padding, 0)
+            addView(hourPicker)
+            addView(hourLabel)
+            addView(minutePicker)
+            addView(minuteLabel)
+        }
         AlertDialog.Builder(this)
             .setTitle(R.string.schedule_shutdown_confirm_title)
-            .setMessage(getString(R.string.schedule_shutdown_confirm_message, timeLabel))
-            .setPositiveButton(R.string.schedule_shutdown_confirm_ok) { _, _ -> requestShutdown(pairing, delaySeconds) }
+            .setView(row)
+            .setPositiveButton(R.string.schedule_shutdown_confirm_ok) { _, _ ->
+                val delaySeconds = hourPicker.value * 3600 + minutePicker.value * 60
+                if (delaySeconds <= 0) {
+                    Toast.makeText(this, R.string.schedule_shutdown_zero, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                requestShutdown(pairing, delaySeconds)
+            }
             .setNegativeButton(R.string.cancel, null)
             .show()
     }

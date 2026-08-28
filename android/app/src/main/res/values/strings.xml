@@ -8,7 +8,7 @@
 
     <string name="power_on">PC 켜기</string>
     <string name="power_off">PC 끄기</string>
-    <string name="schedule_shutdown">예약 끄기</string>
+    <string name="schedule_shutdown">예약</string>
     <string name="wireguard_turn_on">와이어가드 켜기</string>
     <string name="wireguard_turn_off">와이어가드 끄기</string>
 
@@ -54,7 +54,9 @@
     <string name="shutdown_confirm_message">PC를 종료하시겠습니까? 전송 후 10초 뒤 실제로 꺼지며, 그 사이 취소할 수 있습니다.</string>
     <string name="shutdown_confirm_ok">종료</string>
     <string name="schedule_shutdown_confirm_title">예약 끄기</string>
-    <string name="schedule_shutdown_confirm_message">%1$s에 PC를 종료하시겠습니까?</string>
+    <string name="schedule_shutdown_hours_label">시간</string>
+    <string name="schedule_shutdown_minutes_label">분</string>
+    <string name="schedule_shutdown_zero">1분 이상으로 설정해주세요</string>
     <string name="schedule_shutdown_confirm_ok">예약</string>
     <string name="shutdown_requesting">종료 명령을 보내는 중…</string>
     <string name="shutdown_scheduled">10초 후 PC가 종료됩니다</string>
