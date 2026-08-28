@@ -13,7 +13,10 @@ import subprocess
 
 from flask import Flask, request, jsonify
 
-SHUTDOWN_DELAY_SECONDS = 10
+from . import autologin
+
+DEFAULT_SHUTDOWN_DELAY_SECONDS = 10
+MAX_SHUTDOWN_DELAY_SECONDS = 24 * 60 * 60
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
 _WIRELESS_HINTS = ('Wi-Fi', 'Wireless', 'WLAN', '무선')
@@ -74,12 +77,26 @@ def create_app(config) -> Flask:
 
     @app.route('/api/shutdown', methods=['POST'])
     def shutdown():
+        """delay_seconds를 JSON 바디로 받으면 그만큼 뒤에 종료를 예약한다(즉시
+        끄기 버튼은 값을 안 보내 기본 10초 지연을 그대로 쓰고, 예약 종료는 앱이
+        사용자가 입력한 분을 초로 환산해 보낸다) — 둘 다 같은 shutdown /t 명령이라
+        취소도 항상 /api/shutdown/cancel 하나로 처리된다."""
+        delay = DEFAULT_SHUTDOWN_DELAY_SECONDS
+        body = request.get_json(silent=True) or {}
+        raw_delay = body.get('delay_seconds')
+        if raw_delay is not None:
+            try:
+                delay = int(raw_delay)
+            except (TypeError, ValueError):
+                return jsonify(error='delay_seconds 값이 올바르지 않습니다'), 400
+            if not (0 <= delay <= MAX_SHUTDOWN_DELAY_SECONDS):
+                return jsonify(error='delay_seconds 범위가 올바르지 않습니다'), 400
         try:
-            subprocess.run(['shutdown', '/s', '/t', str(SHUTDOWN_DELAY_SECONDS)],
+            subprocess.run(['shutdown', '/s', '/t', str(delay)],
                             check=True, creationflags=_NO_WINDOW)
         except (subprocess.CalledProcessError, FileNotFoundError):
             return jsonify(error='종료 명령을 실행할 수 없습니다'), 500
-        return jsonify(ok=True, delay=SHUTDOWN_DELAY_SECONDS)
+        return jsonify(ok=True, delay=delay)
 
     @app.route('/api/shutdown/cancel', methods=['POST'])
     def cancel_shutdown():
@@ -87,6 +104,32 @@ def create_app(config) -> Flask:
             subprocess.run(['shutdown', '/a'], check=True, creationflags=_NO_WINDOW)
         except (subprocess.CalledProcessError, FileNotFoundError):
             return jsonify(error='예약된 종료가 없습니다'), 400
+        return jsonify(ok=True)
+
+    @app.route('/api/autologin', methods=['POST'])
+    def set_autologin():
+        """부팅 시 자동 로그인(AutoAdminLogon) 설정 — 이미 잠긴 화면을 원격으로
+        푸는 기능이 아니라(Windows 보안 구조상 불가능), 재부팅 시 로그인 화면
+        자체를 건너뛰게 하는 Windows 자체 기능을 켜고 끈다."""
+        body = request.get_json(silent=True) or {}
+        enabled = body.get('enable')
+        if enabled is True:
+            username = (body.get('username') or '').strip()
+            password = body.get('password') or ''
+            domain = (body.get('domain') or '').strip()
+            if not username or not password:
+                return jsonify(error='사용자 이름과 비밀번호를 입력해주세요'), 400
+            try:
+                autologin.enable(username, password, domain)
+            except OSError as e:
+                return jsonify(error=str(e)), 500
+        elif enabled is False:
+            try:
+                autologin.disable()
+            except OSError as e:
+                return jsonify(error=str(e)), 500
+        else:
+            return jsonify(error='enable 값이 필요합니다'), 400
         return jsonify(ok=True)
 
     return app

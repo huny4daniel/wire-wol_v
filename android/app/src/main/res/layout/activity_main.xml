@@ -49,9 +49,19 @@
             android:padding="16dp">
 
             <TextView
+                android:id="@+id/statusPowerText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/status_power_checking"
+                android:textColor="@color/ww_text"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
                 android:id="@+id/statusHostText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
                 android:text="@string/status_target_missing"
                 android:textColor="@color/ww_text"
                 android:textSize="14sp" />
@@ -73,6 +83,16 @@
                 android:text="@string/status_wireguard_missing"
                 android:textColor="@color/ww_hint"
                 android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/statusShutdownText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textColor="@color/ww_accent_red"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
         </LinearLayout>
 
         <Button

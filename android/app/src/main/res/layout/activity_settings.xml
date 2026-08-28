@@ -120,6 +120,25 @@
             android:textColor="@color/ww_hint"
             android:textSize="12sp" />
 
+        <Button
+            android:id="@+id/autoLoginSettingsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="@color/ww_surface"
+            android:text="@string/autologin_open_settings"
+            android:textAllCaps="false"
+            android:textColor="@color/ww_text" />
+
+        <TextView
+            android:id="@+id/autoLoginStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginStart="4dp"
+            android:textColor="@color/ww_hint"
+            android:textSize="12sp" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

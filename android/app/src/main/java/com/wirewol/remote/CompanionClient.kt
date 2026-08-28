@@ -1,6 +1,7 @@
 package com.wirewol.remote
 
 import android.util.Log
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -49,16 +50,42 @@ class CompanionClient {
         }
     }
 
-    fun shutdown(config: Config): Result = postCommand(config, "/api/shutdown")
+    // delaySeconds가 null이면 컴패니언의 기본 지연(즉시 끄기 버튼용)을 그대로
+    // 쓰고, 값을 주면 그만큼 뒤에 종료되도록 예약한다(종료 예약 기능용).
+    fun shutdown(config: Config, delaySeconds: Int? = null): Result {
+        val body = if (delaySeconds != null) {
+            JSONObject().put("delay_seconds", delaySeconds).toString()
+                .toRequestBody("application/json".toMediaType())
+        } else {
+            ByteArray(0).toRequestBody(null)
+        }
+        return postCommand(config, "/api/shutdown", body)
+    }
 
-    fun cancelShutdown(config: Config): Result = postCommand(config, "/api/shutdown/cancel")
+    fun cancelShutdown(config: Config): Result =
+        postCommand(config, "/api/shutdown/cancel", ByteArray(0).toRequestBody(null))
 
-    private fun postCommand(config: Config, path: String): Result {
+    fun enableAutologin(config: Config, username: String, password: String, domain: String): Result {
+        val body = JSONObject().apply {
+            put("enable", true)
+            put("username", username)
+            put("password", password)
+            if (domain.isNotBlank()) put("domain", domain)
+        }.toString().toRequestBody("application/json".toMediaType())
+        return postCommand(config, "/api/autologin", body)
+    }
+
+    fun disableAutologin(config: Config): Result {
+        val body = JSONObject().put("enable", false).toString().toRequestBody("application/json".toMediaType())
+        return postCommand(config, "/api/autologin", body)
+    }
+
+    private fun postCommand(config: Config, path: String, body: okhttp3.RequestBody): Result {
         return try {
             val request = Request.Builder()
                 .url("${baseUrl(config)}$path")
                 .header(TOKEN_HEADER, config.token)
-                .post(ByteArray(0).toRequestBody(null))
+                .post(body)
                 .build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {

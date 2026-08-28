@@ -1,6 +1,8 @@
 package com.wirewol.remote
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.widget.Button
 import android.widget.EditText
@@ -31,11 +33,15 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var pairingConfig: PairingConfig
     private lateinit var routerWol: RouterWol
     private lateinit var wireGuard: WireGuardController
+    private lateinit var autoLoginConfig: AutoLoginConfig
+    private val companionClient = CompanionClient()
+    private val handler = Handler(Looper.getMainLooper())
 
     private lateinit var scanPairingStatus: TextView
     private lateinit var editMacStatus: TextView
     private lateinit var scanWireGuardStatus: TextView
     private lateinit var routerWolStatus: TextView
+    private lateinit var autoLoginStatus: TextView
 
     private enum class ScanTarget { PAIRING, WIREGUARD }
     private var pendingScanTarget = ScanTarget.PAIRING
@@ -56,17 +62,20 @@ class SettingsActivity : AppCompatActivity() {
         pairingConfig = PairingConfig(this)
         routerWol = RouterWol(this)
         wireGuard = WireGuardController(this)
+        autoLoginConfig = AutoLoginConfig(this)
 
         scanPairingStatus = findViewById(R.id.scanPairingStatus)
         editMacStatus = findViewById(R.id.editMacStatus)
         scanWireGuardStatus = findViewById(R.id.scanWireGuardStatus)
         routerWolStatus = findViewById(R.id.routerWolStatus)
+        autoLoginStatus = findViewById(R.id.autoLoginStatus)
 
         findViewById<Button>(R.id.backButton).setOnClickListener { finish() }
         findViewById<Button>(R.id.scanPairingButton).setOnClickListener { launchScan(ScanTarget.PAIRING) }
         findViewById<Button>(R.id.scanWireGuardButton).setOnClickListener { launchScan(ScanTarget.WIREGUARD) }
         findViewById<Button>(R.id.editMacButton).setOnClickListener { showEditMacDialog() }
         findViewById<Button>(R.id.routerWolSettingsButton).setOnClickListener { showRouterWolSettingsDialog() }
+        findViewById<Button>(R.id.autoLoginSettingsButton).setOnClickListener { showAutoLoginSettingsDialog() }
         findViewById<Button>(R.id.clearAllButton).setOnClickListener { showClearAllDialog() }
 
         refreshStatuses()
@@ -104,6 +113,12 @@ class SettingsActivity : AppCompatActivity() {
             getString(R.string.settings_status_router_wol_set, router.host)
         } else {
             getString(R.string.settings_status_router_wol_missing)
+        }
+
+        autoLoginStatus.text = if (autoLoginConfig.isEnabled()) {
+            getString(R.string.settings_status_autologin_set, autoLoginConfig.loadUsername())
+        } else {
+            getString(R.string.settings_status_autologin_missing)
         }
     }
 
@@ -198,6 +213,93 @@ class SettingsActivity : AppCompatActivity() {
             .show()
     }
 
+    // 부팅 시 Windows가 로그인 화면 없이 지정한 계정으로 곧장 로그인되게 한다
+    // (Sysinternals Autologon과 동일한 방식) — 이미 잠긴 화면을 원격으로 푸는
+    // 기능이 아니라, 애초에 로그인 화면 자체를 건너뛰게 하는 것뿐이다. 비밀번호는
+    // 컴패니언 서버에 한 번만 전송되고 이 기기에는 저장되지 않는다.
+    private fun showAutoLoginSettingsDialog() {
+        val pairing = pairingConfig.load()
+        if (pairing == null) {
+            Toast.makeText(this, R.string.pairing_missing, Toast.LENGTH_LONG).show()
+            return
+        }
+        val padding = (24 * resources.displayMetrics.density).toInt()
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding / 2, padding, 0)
+        }
+
+        fun addField(hint: String, value: String? = null, isPassword: Boolean = false): EditText {
+            val field = EditText(this)
+            field.hint = hint
+            field.setText(value)
+            if (isPassword) {
+                field.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            }
+            container.addView(field)
+            return field
+        }
+
+        val usernameInput = addField(getString(R.string.autologin_username_hint), autoLoginConfig.loadUsername())
+        val passwordInput = addField(getString(R.string.autologin_password_hint), isPassword = true)
+        val domainInput = addField(getString(R.string.autologin_domain_hint))
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.autologin_settings_title)
+            .setMessage(R.string.autologin_settings_desc)
+            .setView(container)
+            .setPositiveButton(R.string.autologin_save) { _, _ ->
+                val username = usernameInput.text.toString().trim()
+                val password = passwordInput.text.toString()
+                val domain = domainInput.text.toString().trim()
+                if (username.isEmpty() || password.isEmpty()) {
+                    Toast.makeText(this, R.string.autologin_incomplete, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                applyAutoLogin(pairing, username, password, domain)
+            }
+            .setNeutralButton(R.string.autologin_clear) { _, _ -> clearAutoLogin(pairing) }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun applyAutoLogin(pairing: PairingConfig.Info, username: String, password: String, domain: String) {
+        Toast.makeText(this, R.string.autologin_saving, Toast.LENGTH_SHORT).show()
+        val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
+        Thread {
+            val result = companionClient.enableAutologin(config, username, password, domain)
+            handler.post {
+                when (result) {
+                    is CompanionClient.Result.Success -> {
+                        autoLoginConfig.saveEnabled(username)
+                        Toast.makeText(this, R.string.autologin_saved, Toast.LENGTH_SHORT).show()
+                        refreshStatuses()
+                    }
+                    is CompanionClient.Result.Failure ->
+                        Toast.makeText(this, getString(R.string.autologin_save_failed, result.message), Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun clearAutoLogin(pairing: PairingConfig.Info) {
+        val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
+        Thread {
+            val result = companionClient.disableAutologin(config)
+            handler.post {
+                when (result) {
+                    is CompanionClient.Result.Success -> {
+                        autoLoginConfig.saveDisabled()
+                        Toast.makeText(this, R.string.autologin_cleared, Toast.LENGTH_SHORT).show()
+                        refreshStatuses()
+                    }
+                    is CompanionClient.Result.Failure ->
+                        Toast.makeText(this, getString(R.string.autologin_clear_failed, result.message), Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
     // 페어링 QR로 받은 MAC이 잘못된 어댑터를 가리키는 경우(PC에 여러 랜카드가
     // 있는 등)를 대비한 수동 수정 창 — 정상적인 경우엔 쓸 필요가 없다.
     private fun showEditMacDialog() {
@@ -232,6 +334,7 @@ class SettingsActivity : AppCompatActivity() {
                 pairingConfig.clear()
                 wireGuard.clearConfig()
                 routerWol.clearConfig()
+                autoLoginConfig.saveDisabled()
                 Toast.makeText(this, R.string.clear_all_done, Toast.LENGTH_SHORT).show()
                 refreshStatuses()
             }
