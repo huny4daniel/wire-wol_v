@@ -78,7 +78,13 @@ def create_app(config) -> Flask:
         """delay_seconds를 JSON 바디로 받으면 그만큼 뒤에 종료를 예약한다(즉시
         끄기 버튼은 값을 안 보내 기본 10초 지연을 그대로 쓰고, 예약 종료는 앱이
         사용자가 입력한 분을 초로 환산해 보낸다) — 둘 다 같은 shutdown /t 명령이라
-        취소도 항상 /api/shutdown/cancel 하나로 처리된다."""
+        취소도 항상 /api/shutdown/cancel 하나로 처리된다.
+
+        Windows는 이미 예약된 종료가 있는 채로 shutdown /s /t를 다시 호출하면
+        갱신되지 않고 그냥 실패한다 — 즉시 끄기와 예약 끄기가 같은 명령을 쓰다
+        보니 둘 중 하나를 걸어둔 채 나머지를 누르면 실패 토스트만 뜨는 문제가
+        있었다. 매번 새로 걸기 전에 기존 예약을 먼저 취소해 항상 최신 요청으로
+        덮어써지도록 한다 — 예약이 없을 때의 /a 실패는 무시해도 되는 정상 상황."""
         delay = DEFAULT_SHUTDOWN_DELAY_SECONDS
         body = request.get_json(silent=True) or {}
         raw_delay = body.get('delay_seconds')
@@ -89,6 +95,7 @@ def create_app(config) -> Flask:
                 return jsonify(error='delay_seconds 값이 올바르지 않습니다'), 400
             if not (0 <= delay <= MAX_SHUTDOWN_DELAY_SECONDS):
                 return jsonify(error='delay_seconds 범위가 올바르지 않습니다'), 400
+        subprocess.run(['shutdown', '/a'], creationflags=_NO_WINDOW)
         try:
             subprocess.run(['shutdown', '/s', '/t', str(delay)],
                             check=True, creationflags=_NO_WINDOW)
