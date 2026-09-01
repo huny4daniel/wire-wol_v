@@ -50,6 +50,10 @@ class MainActivity : AppCompatActivity() {
     private val companionClient = CompanionClient()
     private val handler = Handler(Looper.getMainLooper())
 
+    // PC 켜기 버튼을 누른 뒤 전원이 켜졌는지 5초마다 재확인하는 폴링 콜백 —
+    // 화면을 벗어나면(onPause) 죽은 액티비티를 참조하지 않도록 반드시 멈춘다.
+    private var powerPollRunnable: Runnable? = null
+
     // 예약된 종료 시각(epoch millis)만 담는 평범한 prefs — 민감 정보가 아니고,
     // 앱을 나갔다 돌아와도(집 밖에서 예약해두고 나중에 확인하는 경우가 있으므로)
     // "예약된 종료" 표시줄을 계속 보여주기 위해 액티비티 밖에 남겨둔다.
@@ -103,6 +107,11 @@ class MainActivity : AppCompatActivity() {
         handler.postDelayed({ refreshWireGuardStatus() }, WIREGUARD_STATUS_RECHECK_DELAY_MS)
     }
 
+    override fun onPause() {
+        super.onPause()
+        stopPowerOnPolling()
+    }
+
     private fun updateStatus() {
         val pairing = pairingConfig.load()
         statusHostText.text = if (pairing != null) {
@@ -131,13 +140,15 @@ class MainActivity : AppCompatActivity() {
     // PC 전원 상태 표시 — 네트워크 종류를 따지지 않고 컴패니언 서버에 곧장
     // 핑을 시도한다(같은 LAN이든 WireGuard 터널이든 도달 가능하면 응답이 온다;
     // 도달 불가능하면 그냥 "확인 불가"로 뭉뚱그려 보여준다).
-    private fun checkPowerStatus(pairing: PairingConfig.Info?) {
+    private fun checkPowerStatus(pairing: PairingConfig.Info?, onResult: ((Boolean) -> Unit)? = null) {
         if (pairing == null) {
             setPowerStatus(R.string.status_power_pairing_missing, R.color.ww_hint)
+            onResult?.invoke(false)
             return
         }
         if (!hasAnyNetwork()) {
             setPowerStatus(R.string.status_power_no_network, R.color.ww_hint)
+            onResult?.invoke(false)
             return
         }
         setPowerStatus(R.string.status_power_checking, R.color.ww_hint)
@@ -146,13 +157,41 @@ class MainActivity : AppCompatActivity() {
             val result = companionClient.ping(config)
             handler.post {
                 when (result) {
-                    is CompanionClient.Result.Success ->
+                    is CompanionClient.Result.Success -> {
                         setPowerStatus(R.string.status_power_on, R.color.ww_accent_green)
-                    is CompanionClient.Result.Failure ->
+                        onResult?.invoke(true)
+                    }
+                    is CompanionClient.Result.Failure -> {
                         setPowerStatus(R.string.status_power_off, R.color.ww_accent_red)
+                        onResult?.invoke(false)
+                    }
                 }
             }
         }.start()
+    }
+
+    // PC 켜기 버튼을 누른 직후부터 컴패니언이 응답할 때까지(부팅 완료까지)
+    // 5초 간격으로 전원 상태를 재확인한다. 켜진 것을 확인하면 스스로 멈춘다.
+    private fun startPowerOnPolling(pairing: PairingConfig.Info) {
+        stopPowerOnPolling()
+        val runnable = object : Runnable {
+            override fun run() {
+                checkPowerStatus(pairing) { isOn ->
+                    if (!isOn) {
+                        handler.postDelayed(this, POWER_ON_POLL_INTERVAL_MS)
+                    } else {
+                        powerPollRunnable = null
+                    }
+                }
+            }
+        }
+        powerPollRunnable = runnable
+        handler.postDelayed(runnable, POWER_ON_POLL_INTERVAL_MS)
+    }
+
+    private fun stopPowerOnPolling() {
+        powerPollRunnable?.let { handler.removeCallbacks(it) }
+        powerPollRunnable = null
     }
 
     private fun setPowerStatus(textRes: Int, colorRes: Int) {
@@ -178,6 +217,7 @@ class MainActivity : AppCompatActivity() {
         sendWakeOnLan(mac)
         Toast.makeText(this, R.string.wake_sent, Toast.LENGTH_SHORT).show()
         triggerRemoteWakeIfConfigured(mac)
+        pairingConfig.load()?.let { startPowerOnPolling(it) }
     }
 
     private fun sendWakeOnLan(mac: String) {
@@ -398,5 +438,6 @@ class MainActivity : AppCompatActivity() {
         private const val QUICK_SHUTDOWN_SECONDS = 10
         private const val KEY_PENDING_SHUTDOWN = "pending_shutdown_at"
         private const val WIREGUARD_STATUS_RECHECK_DELAY_MS = 1200L
+        private const val POWER_ON_POLL_INTERVAL_MS = 5_000L
     }
 }

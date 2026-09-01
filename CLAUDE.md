@@ -36,7 +36,7 @@ PyInstaller로 빌드된(`frozen`) exe에서는 등록이 실제 exe 경로를 �
 
 `app/server.py`는 Flask 앱 하나로 최소한의 API만 제공한다. 브라우저 세션이 아니라 앱이 직접 호출하는 단순 명령이라 쿠키 기반 페어링 대신 **고정 토큰**(`X-WireWOL-Token` 헤더)으로 인증한다 — `before_request`에서 모든 요청에 대해 검사한다.
 - `GET /api/ping`: 헬스체크 + `get_primary_mac()`(mobile-hub-viewer_v의 `app/routes/system.py`에서 그대로 옮긴, `getmac` CSV 파싱으로 Wi-Fi 어댑터 MAC을 우선 찾는 로직)로 알아낸 MAC을 같이 반환한다.
-- `POST /api/shutdown`: `shutdown /s /t 10`(10초 지연 종료 — 폰에서의 오조작이 곧바로 작업을 날리지 않도록).
+- `POST /api/shutdown`: `shutdown /s /f /t 10`(10초 지연 종료, `/f`로 실행 중인 앱 강제 종료 — 폰에서의 오조작이 곧바로 작업을 날리지 않도록).
 - `POST /api/shutdown/cancel`: `shutdown /a`로 취소.
 
 트레이 "연결 정보 보기"(`_pairing_payload`)는 `{"host","port","token","mac"}` 형태의 **JSON 텍스트**를 QR로 보여준다 — mobile-hub-viewer_v의 페어링 QR(URL 형식)과 다르게, 여기는 감쌀 웹앱이 없어 순수 데이터만 필요하기 때문이다. **이 JSON 스키마가 안드로이드 쪽 `PairingConfig`/`MainActivity.handlePairingScan`과의 계약이다 — 필드를 추가/변경하면 양쪽을 함께 고칠 것.**

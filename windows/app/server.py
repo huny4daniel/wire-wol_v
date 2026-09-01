@@ -97,7 +97,7 @@ def create_app(config) -> Flask:
                 return jsonify(error='delay_seconds 범위가 올바르지 않습니다'), 400
         subprocess.run(['shutdown', '/a'], creationflags=_NO_WINDOW)
         try:
-            subprocess.run(['shutdown', '/s', '/t', str(delay)],
+            subprocess.run(['shutdown', '/s', '/f', '/t', str(delay)],
                             check=True, creationflags=_NO_WINDOW)
         except (subprocess.CalledProcessError, FileNotFoundError):
             return jsonify(error='종료 명령을 실행할 수 없습니다'), 500
