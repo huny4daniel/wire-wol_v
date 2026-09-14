@@ -23,17 +23,19 @@ import com.journeyapps.barcodescanner.ScanOptions
 import org.json.JSONObject
 
 /**
- * 자주 쓰지 않는 설정들을 모아둔 화면 — 연결 정보/WireGuard 설정 스캔, MAC
- * 수동 입력, 원격(공유기) WOL 설정, 전체 초기화. [MainActivity]의 리모컨
- * 화면을 버튼 몇 개로 단순하게 유지하기 위해 여기로 분리했다.
+ * 자주 쓰지 않는 설정들을 모아둔 화면 — PC 등록(연결 정보 QR/수동 입력),
+ * WireGuard 설정 스캔, 원격(공유기) WOL 설정, 전체 초기화. [MainActivity]의
+ * 리모컨 화면을 버튼 몇 개로 단순하게 유지하기 위해 여기로 분리했다.
  *
  * 각 항목 아래에 현재 설정 여부를 보여주는 상태 문구를 둔다 — 어떤 게
  * 필수(연결 정보)고 어떤 게 선택(WireGuard/원격 WOL)인지, 그리고 지금
  * 실제로 저장되어 있는 값이 뭔지 한눈에 보이게 하기 위함.
  *
- * 참고: 연결 정보 QR을 스캔하면 MAC 주소도 함께 저장되므로(PC 트레이가 QR에
- * 미리 담아 보냄) "MAC 주소 직접 입력"은 필수 단계가 아니라, 여러 랜카드가
- * 있어 잘못된 어댑터가 잡혔을 때만 쓰는 보정용이다.
+ * "PC 등록"은 원래 "연결 정보 스캔"과 "MAC 주소 직접 입력" 두 버튼이었다 —
+ * 후자는 QR로 받은 MAC이 잘못된 어댑터를 가리킬 때만 쓰는 보정용이라 굳이
+ * 따로 둘 필요가 없어서, QR 스캔(카메라/갤러리)과 함께 "직접 입력" 옵션
+ * 하나로 합쳤다(직접 입력 창에서 host/port/token/mac을 전부 고칠 수 있어
+ * 예전 MAC 전용 입력의 상위 호환이다).
  */
 class SettingsActivity : AppCompatActivity() {
 
@@ -107,7 +109,6 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<Button>(R.id.scanPairingButton).setOnClickListener { launchScan(ScanTarget.PAIRING) }
         findViewById<Button>(R.id.showPairingQrButton).setOnClickListener { showPairingQrDialog() }
         findViewById<Button>(R.id.scanWireGuardButton).setOnClickListener { launchScan(ScanTarget.WIREGUARD) }
-        findViewById<Button>(R.id.editMacButton).setOnClickListener { showEditMacDialog() }
         findViewById<Button>(R.id.routerWolSettingsButton).setOnClickListener { showRouterWolSettingsDialog() }
         findViewById<Button>(R.id.clearAllButton).setOnClickListener { showClearAllDialog() }
 
@@ -147,14 +148,25 @@ class SettingsActivity : AppCompatActivity() {
         } else {
             getString(R.string.settings_status_router_wol_missing)
         }
+
     }
 
+    // PAIRING(=PC 등록)은 QR이 없어도 host/port/token/mac을 직접 입력할 수
+    // 있는 항목을 하나 더 둔다 — 예전에 별도 버튼이었던 "MAC 주소 직접 입력"을
+    // 이 안으로 흡수한 것(전체 필드를 고칠 수 있으니 상위 호환).
+    // WIREGUARD는 QR 입력만 지원한다(.conf 텍스트를 손으로 치는 건 비현실적).
     private fun launchScan(target: ScanTarget) {
         pendingScanTarget = target
+        val items = mutableListOf(getString(R.string.scan_source_camera), getString(R.string.scan_source_gallery))
+        if (target == ScanTarget.PAIRING) items.add(getString(R.string.scan_source_manual))
         AlertDialog.Builder(this)
             .setTitle(R.string.scan_source_title)
-            .setItems(arrayOf(getString(R.string.scan_source_camera), getString(R.string.scan_source_gallery))) { _, which ->
-                if (which == 0) launchCameraScan() else galleryImageLauncher.launch("image/*")
+            .setItems(items.toTypedArray()) { _, which ->
+                when (which) {
+                    0 -> launchCameraScan()
+                    1 -> galleryImageLauncher.launch("image/*")
+                    else -> showManualPairingDialog()
+                }
             }
             .show()
     }
@@ -305,26 +317,45 @@ class SettingsActivity : AppCompatActivity() {
             .show()
     }
 
-    // 페어링 QR로 받은 MAC이 잘못된 어댑터를 가리키는 경우(PC에 여러 랜카드가
-    // 있는 등)를 대비한 수동 수정 창 — 정상적인 경우엔 쓸 필요가 없다.
-    private fun showEditMacDialog() {
+    // QR 없이 PC 연결 정보를 직접 입력하는 창 — "PC 등록" 버튼의 세 번째
+    // 옵션. 예전에 있던 "MAC 주소 직접 입력"(잘못 잡힌 랜카드 보정용)을
+    // 이 창의 mac 필드 하나로 흡수했다. 기존 값이 있으면 채워둬서 일부
+    // 필드만(예: MAC만) 고치는 용도로도 쓸 수 있다.
+    private fun showManualPairingDialog() {
+        val existing = pairingConfig.load()
         val padding = (24 * resources.displayMetrics.density).toInt()
-        val field = EditText(this).apply {
-            hint = getString(R.string.edit_mac_hint)
-            setText(pairingConfig.loadMac())
-        }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(padding, padding / 2, padding, 0)
-            addView(field)
         }
 
+        fun addField(hint: String, value: String?): EditText {
+            val field = EditText(this)
+            field.hint = hint
+            field.setText(value)
+            container.addView(field)
+            return field
+        }
+
+        val hostInput = addField(getString(R.string.pairing_host_hint), existing?.host)
+        val portInput = addField(getString(R.string.pairing_port_hint), existing?.port)
+        val tokenInput = addField(getString(R.string.pairing_token_hint), existing?.token)
+        val macInput = addField(getString(R.string.pairing_mac_hint), pairingConfig.loadMac())
+
         AlertDialog.Builder(this)
-            .setTitle(R.string.edit_mac_title)
+            .setTitle(R.string.pairing_manual_title)
             .setView(container)
-            .setPositiveButton(R.string.edit_mac_save) { _, _ ->
-                pairingConfig.saveMac(field.text.toString().trim())
-                Toast.makeText(this, R.string.mac_saved, Toast.LENGTH_SHORT).show()
+            .setPositiveButton(R.string.pairing_manual_save) { _, _ ->
+                val host = hostInput.text.toString().trim()
+                val port = portInput.text.toString().trim()
+                val token = tokenInput.text.toString().trim()
+                val mac = macInput.text.toString().trim()
+                if (host.isEmpty() || port.isEmpty() || token.isEmpty()) {
+                    Toast.makeText(this, R.string.pairing_manual_incomplete, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                pairingConfig.save(host, port, token, mac)
+                Toast.makeText(this, R.string.pairing_saved, Toast.LENGTH_SHORT).show()
                 refreshStatuses()
             }
             .setNegativeButton(R.string.cancel, null)

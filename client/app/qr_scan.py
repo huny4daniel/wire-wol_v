@@ -8,6 +8,18 @@ from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout
 from pyzbar.pyzbar import decode as decode_qr
 
 
+def decode_qr_from_file(path: str) -> str | None:
+    """카메라 대신 이미 갖고 있는 QR 이미지 파일(스크린샷 등)에서 바로
+    읽어온다 — android 앱의 "갤러리에서 QR 이미지 불러오기"에 대응."""
+    image = cv2.imread(path)
+    if image is None:
+        return None
+    codes = decode_qr(image)
+    if not codes:
+        return None
+    return codes[0].data.decode('utf-8', errors='replace')
+
+
 class QrScanDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)

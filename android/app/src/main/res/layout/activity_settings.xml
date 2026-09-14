@@ -63,16 +63,6 @@
             android:textColor="@color/ww_hint"
             android:textSize="12sp" />
 
-        <Button
-            android:id="@+id/editMacButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:backgroundTint="@color/ww_surface"
-            android:text="@string/edit_mac"
-            android:textAllCaps="false"
-            android:textColor="@color/ww_text" />
-
         <TextView
             android:id="@+id/editMacStatus"
             android:layout_width="match_parent"

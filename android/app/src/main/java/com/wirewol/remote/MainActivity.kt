@@ -50,9 +50,18 @@ class MainActivity : AppCompatActivity() {
     private val companionClient = CompanionClient()
     private val handler = Handler(Looper.getMainLooper())
 
+    // VPN 권한 승인 후 실행할 작업 — "와이어가드 켜기" 버튼(항상 updateStatus로
+    // 마무리)과 ensureConnectivity의 자동 연결(원래 하려던 작업을 이어서 실행)이
+    // 이 런처 하나를 공유하므로, 승인 시점에 어느 쪽을 마저 할지 여기 담아둔다.
+    private var pendingAfterVpnPermission: (() -> Unit)? = null
+
     // PC 켜기 버튼을 누른 뒤 전원이 켜졌는지 5초마다 재확인하는 폴링 콜백 —
     // 화면을 벗어나면(onPause) 죽은 액티비티를 참조하지 않도록 반드시 멈춘다.
     private var powerPollRunnable: Runnable? = null
+
+    // 예약된 종료가 실제로 실행되는 시점에 와이어가드를 끄기 위한 지연 콜백 —
+    // 종료가 취소되면 cancelPendingShutdown에서 함께 취소된다.
+    private var wireGuardAutoOffRunnable: Runnable? = null
 
     // 예약된 종료 시각(epoch millis)만 담는 평범한 prefs — 민감 정보가 아니고,
     // 앱을 나갔다 돌아와도(집 밖에서 예약해두고 나중에 확인하는 경우가 있으므로)
@@ -60,11 +69,14 @@ class MainActivity : AppCompatActivity() {
     private val shutdownPrefs by lazy { getSharedPreferences("shutdown_prefs", Context.MODE_PRIVATE) }
 
     private val vpnPermissionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val after = pendingAfterVpnPermission
+        pendingAfterVpnPermission = null
         Thread {
             val ok = wireGuard.bringUp()
             handler.post {
                 if (!ok) Toast.makeText(this, R.string.wireguard_failed, Toast.LENGTH_LONG).show()
-                updateStatus()
+                refreshWireGuardStatus()
+                if (after != null) after() else updateStatus()
             }
         }.start()
     }
@@ -171,14 +183,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     // PC 켜기 버튼을 누른 직후부터 컴패니언이 응답할 때까지(부팅 완료까지)
-    // 5초 간격으로 전원 상태를 재확인한다. 켜진 것을 확인하면 스스로 멈춘다.
+    // 전원 상태를 재확인한다 — 처음 FAST_POLL_DURATION_MS 동안은 1초 간격으로
+    // 빠르게 확인하고(절전 모드에서 깨는 경우처럼 금방 켜질 수도 있어서),
+    // 그 이후에는(완전 종료 상태에서 부팅하는 경우처럼 시간이 걸릴 때) 5초
+    // 간격으로 늦춰 불필요한 요청을 줄인다. 켜진 것을 확인하면 스스로 멈춘다.
     private fun startPowerOnPolling(pairing: PairingConfig.Info) {
         stopPowerOnPolling()
+        val startedAt = System.currentTimeMillis()
         val runnable = object : Runnable {
             override fun run() {
                 checkPowerStatus(pairing) { isOn ->
                     if (!isOn) {
-                        handler.postDelayed(this, POWER_ON_POLL_INTERVAL_MS)
+                        val elapsed = System.currentTimeMillis() - startedAt
+                        val nextInterval = if (elapsed < FAST_POWER_ON_POLL_DURATION_MS) {
+                            FAST_POWER_ON_POLL_INTERVAL_MS
+                        } else {
+                            POWER_ON_POLL_INTERVAL_MS
+                        }
+                        handler.postDelayed(this, nextInterval)
                     } else {
                         powerPollRunnable = null
                     }
@@ -186,7 +208,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         powerPollRunnable = runnable
-        handler.postDelayed(runnable, POWER_ON_POLL_INTERVAL_MS)
+        handler.postDelayed(runnable, FAST_POWER_ON_POLL_INTERVAL_MS)
     }
 
     private fun stopPowerOnPolling() {
@@ -205,6 +227,50 @@ class MainActivity : AppCompatActivity() {
         return cm.getNetworkCapabilities(network) != null
     }
 
+    // WireGuard가 없거나 이미 켜져 있으면 곧바로 onReady를 실행한다. 그 외의
+    // 경우엔 WireGuard 없이 컴패니언 포트로 짧게(1.5초) 직접 연결을 찔러봐서
+    // 지금 집 안(또는 이미 도달 가능한 상태)인지 확인한다 — SSID 비교 대신
+    // 이 방식을 쓰는 이유는 위치 권한이 필요 없고, "실제로 닿는가"만 보므로
+    // 같은 이름의 다른 네트워크에 속을 일도 없기 때문이다. 도달하면(내부)
+    // 그대로 진행하고, 안 되면(외부) 와이어가드를 자동으로 켠 뒤 진행한다.
+    // PC 켜기/끄기처럼 컴패니언과 통신이 필요한 동작 앞에 이 함수를 거치면,
+    // 매번 손으로 와이어가드부터 켜야 하는 수고를 없앨 수 있다.
+    private fun ensureConnectivity(onReady: () -> Unit) {
+        if (!wireGuard.hasConfig() || wireGuard.isUp()) {
+            onReady()
+            return
+        }
+        val pairing = pairingConfig.load()
+        if (pairing == null) {
+            onReady()
+            return
+        }
+        Thread {
+            val reachable = NetworkProbe.isReachableDirectly(pairing.host, pairing.port.toIntOrNull() ?: 0)
+            handler.post {
+                if (reachable) {
+                    onReady()
+                    return@post
+                }
+                Toast.makeText(this, R.string.wireguard_auto_connecting, Toast.LENGTH_SHORT).show()
+                val prepareIntent = VpnService.prepare(this)
+                if (prepareIntent != null) {
+                    pendingAfterVpnPermission = onReady
+                    vpnPermissionLauncher.launch(prepareIntent)
+                } else {
+                    Thread {
+                        val ok = wireGuard.bringUp()
+                        handler.post {
+                            if (!ok) Toast.makeText(this, R.string.wireguard_auto_connect_failed, Toast.LENGTH_SHORT).show()
+                            refreshWireGuardStatus()
+                            onReady()
+                        }
+                    }.start()
+                }
+            }
+        }.start()
+    }
+
     // PC가 꺼져있어도 눌러서 깨울 수 있도록 매직 패킷을 보낸다(Wake-on-LAN).
     // 폰이 PC와 같은 LAN(와이파이)에 있거나, WireGuard로 붙어있어 브로드캐스트가
     // 도달할 수 있어야 한다.
@@ -214,10 +280,12 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.mac_missing_for_wake, Toast.LENGTH_LONG).show()
             return
         }
-        sendWakeOnLan(mac)
-        Toast.makeText(this, R.string.wake_sent, Toast.LENGTH_SHORT).show()
-        triggerRemoteWakeIfConfigured(mac)
-        pairingConfig.load()?.let { startPowerOnPolling(it) }
+        ensureConnectivity {
+            sendWakeOnLan(mac)
+            Toast.makeText(this, R.string.wake_sent, Toast.LENGTH_SHORT).show()
+            triggerRemoteWakeIfConfigured(mac)
+            pairingConfig.load()?.let { startPowerOnPolling(it) }
+        }
     }
 
     private fun sendWakeOnLan(mac: String) {
@@ -328,30 +396,51 @@ class MainActivity : AppCompatActivity() {
     // delaySeconds가 null이면 컴패니언 기본 지연(10초, 즉시 끄기)을 그대로
     // 쓰고, 값이 있으면 그만큼 뒤로 예약한다.
     private fun requestShutdown(pairing: PairingConfig.Info, delaySeconds: Int?) {
-        Toast.makeText(this, R.string.shutdown_requesting, Toast.LENGTH_SHORT).show()
-        val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
-        Thread {
-            val result = companionClient.shutdown(config, delaySeconds)
-            handler.post {
-                when (result) {
-                    is CompanionClient.Result.Success -> onShutdownScheduled(delaySeconds ?: QUICK_SHUTDOWN_SECONDS)
-                    is CompanionClient.Result.Failure ->
-                        Toast.makeText(this, getString(R.string.shutdown_failed, result.message), Toast.LENGTH_LONG).show()
+        ensureConnectivity {
+            Toast.makeText(this, R.string.shutdown_requesting, Toast.LENGTH_SHORT).show()
+            val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
+            Thread {
+                val result = companionClient.shutdown(config, delaySeconds)
+                handler.post {
+                    when (result) {
+                        is CompanionClient.Result.Success -> onShutdownScheduled(delaySeconds ?: QUICK_SHUTDOWN_SECONDS)
+                        is CompanionClient.Result.Failure ->
+                            Toast.makeText(this, getString(R.string.shutdown_failed, result.message), Toast.LENGTH_LONG).show()
+                    }
                 }
-            }
-        }.start()
+            }.start()
+        }
     }
 
     private fun onShutdownScheduled(delaySeconds: Int) {
         val targetMillis = System.currentTimeMillis() + delaySeconds * 1000L
         shutdownPrefs.edit().putLong(KEY_PENDING_SHUTDOWN, targetMillis).apply()
         updatePendingShutdownStatus()
+        scheduleWireGuardAutoOff(delaySeconds)
         if (delaySeconds <= QUICK_SHUTDOWN_SECONDS) {
             showShutdownScheduledSnackbar()
         } else {
             val timeLabel = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(targetMillis))
             Toast.makeText(this, getString(R.string.shutdown_scheduled_at, timeLabel), Toast.LENGTH_LONG).show()
         }
+    }
+
+    // PC가 실제로 꺼지는 시점에 맞춰(예약 지연이 끝난 뒤) 와이어가드도 함께
+    // 끈다 — 종료 취소 시 그사이엔 여전히 PC에 붙어있어야 하므로, 예약을
+    // 걸 때 곧바로 끄지 않고 지연 시간만큼 기다렸다가 끈다. 취소되면
+    // cancelPendingShutdown에서 이 예약도 함께 취소한다.
+    private fun scheduleWireGuardAutoOff(delaySeconds: Int) {
+        wireGuardAutoOffRunnable?.let { handler.removeCallbacks(it) }
+        if (!wireGuard.hasConfig() || !wireGuard.isUp()) return
+        val runnable = Runnable {
+            wireGuardAutoOffRunnable = null
+            Thread {
+                wireGuard.bringDown()
+                handler.post { refreshWireGuardStatus() }
+            }.start()
+        }
+        wireGuardAutoOffRunnable = runnable
+        handler.postDelayed(runnable, delaySeconds * 1000L)
     }
 
     private fun showShutdownScheduledSnackbar() {
@@ -389,6 +478,8 @@ class MainActivity : AppCompatActivity() {
                 when (result) {
                     is CompanionClient.Result.Success -> {
                         shutdownPrefs.edit().remove(KEY_PENDING_SHUTDOWN).apply()
+                        wireGuardAutoOffRunnable?.let { handler.removeCallbacks(it) }
+                        wireGuardAutoOffRunnable = null
                         Toast.makeText(this, R.string.shutdown_cancelled, Toast.LENGTH_SHORT).show()
                         updatePendingShutdownStatus()
                     }
@@ -439,5 +530,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_PENDING_SHUTDOWN = "pending_shutdown_at"
         private const val WIREGUARD_STATUS_RECHECK_DELAY_MS = 1200L
         private const val POWER_ON_POLL_INTERVAL_MS = 5_000L
+        private const val FAST_POWER_ON_POLL_INTERVAL_MS = 1_000L
+        private const val FAST_POWER_ON_POLL_DURATION_MS = 15_000L
     }
 }

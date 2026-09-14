@@ -7,7 +7,9 @@
 백그라운드로 보내도 자동으로 끄지 않음), 데스크톱 리모컨의 다른 버튼들과
 같은 조작 방식을 유지하기 위함이다.
 """
+import socket
 import threading
+import time
 
 from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -22,8 +24,27 @@ from app.router_wol import RouterWolError, trigger_remote_wake
 from app.settings_dialog import SettingsDialog
 from app.wireguard_client import WireGuardError
 
+# PC 켜기 폴링: 처음 FAST_POWER_ON_POLL_DURATION_MS 동안은 1초 간격으로
+# 빠르게 확인하고(절전 모드에서 깨는 경우처럼 금방 켜질 수도 있어서), 그
+# 이후에는(완전 종료 상태에서 부팅하는 경우) 5초 간격으로 늦춘다 — android
+# MainActivity.kt의 동일한 폴링 로직과 대응.
 _POWER_ON_POLL_INTERVAL_MS = 5_000
+_FAST_POWER_ON_POLL_INTERVAL_MS = 1_000
+_FAST_POWER_ON_POLL_DURATION_MS = 15_000
 _QUICK_SHUTDOWN_SECONDS = 10
+_CONNECTIVITY_PROBE_TIMEOUT_SECONDS = 1.5
+
+
+def _is_reachable_directly(host: str, port: int) -> bool:
+    """WireGuard 없이 컴패니언 포트로 짧게 직접 연결을 찔러본다 — 지금 집
+    안(또는 이미 도달 가능한 상태)인지 판단하는 용도. Wi-Fi 이름(SSID) 비교
+    대신 이 방식을 쓰는 이유는 별도 권한이 필요 없고, "실제로 닿는가"만
+    보므로 더 정확하기 때문이다(android 앱의 NetworkProbe와 동일한 방식)."""
+    try:
+        with socket.create_connection((host, port), timeout=_CONNECTIVITY_PROBE_TIMEOUT_SECONDS):
+            return True
+    except OSError:
+        return False
 
 
 class _AsyncBridge(QObject):
@@ -54,7 +75,13 @@ class MainWindow(QWidget):
         self.config = ClientConfig()
         self._bridges = []  # run_async가 만드는 브리지들이 GC되지 않게 붙잡아둔다
         self._power_poll_timer = QTimer(self)
+        self._power_poll_timer.setSingleShot(True)
         self._power_poll_timer.timeout.connect(self._poll_power_status)
+        self._power_poll_started_at = None
+
+        # 예약된 종료가 실제로 실행되는 시점에 와이어가드를 끄기 위한 지연
+        # 타이머 — 종료가 취소되면 _cancel_pending_shutdown에서 멈춘다.
+        self._wireguard_auto_off_timer = None
 
         self.setWindowTitle('WireWOL')
         self.setFixedWidth(360)
@@ -141,6 +168,36 @@ class MainWindow(QWidget):
 
         self._bridges.append(run_async(lambda: companion_client.ping(config), on_done))
 
+    # ---- 연결 확보(WireGuard 자동 켜기) ----
+
+    def _ensure_connectivity(self, pairing, on_ready):
+        """WireGuard가 없거나 이미 켜져 있으면 곧바로 on_ready를 실행한다.
+        그 외의 경우엔 WireGuard 없이 컴패니언 포트로 짧게(1.5초) 직접 연결을
+        찔러봐서 지금 도달 가능한지(=내부) 확인하고, 안 되면(=외부) 와이어
+        가드를 자동으로 켠 뒤 on_ready를 실행한다. PC 켜기/끄기처럼 컴패니언과
+        통신이 필요한 동작 앞에 이 함수를 거치면, 매번 손으로 와이어가드부터
+        켜야 하는 수고를 없앨 수 있다."""
+        conf = self.config.load_wireguard_conf()
+        if not conf or wireguard_client.is_up():
+            on_ready()
+            return
+
+        def on_probe_done(reachable, error):
+            if error is None and reachable:
+                on_ready()
+                return
+
+            def on_bring_up_done(result, error2):
+                if error2 is not None:
+                    message = str(error2) if isinstance(error2, WireGuardError) else f'WireGuard 자동 연결 실패: {error2}'
+                    QMessageBox.warning(self, 'WireGuard', message)
+                self._refresh_wireguard_status()
+                on_ready()
+
+            self._bridges.append(run_async(lambda: wireguard_client.bring_up(conf), on_bring_up_done))
+
+        self._bridges.append(run_async(lambda: _is_reachable_directly(pairing['host'], pairing['port']), on_probe_done))
+
     # ---- PC 켜기 ----
 
     def _on_power_on_clicked(self):
@@ -149,14 +206,18 @@ class MainWindow(QWidget):
         if not mac:
             QMessageBox.warning(self, '오류', 'MAC 주소가 없어 PC를 깨울 수 없습니다. 설정에서 연결 정보를 다시 확인하세요')
             return
-        try:
-            wol.send_magic_packet(mac)
-        except ValueError as e:
-            QMessageBox.warning(self, '오류', str(e))
-            return
-        self._trigger_remote_wake_if_configured(mac)
-        QMessageBox.information(self, 'PC 켜기', '깨우기 신호를 보냈습니다')
-        self._start_power_on_polling(pairing)
+
+        def proceed():
+            try:
+                wol.send_magic_packet(mac)
+            except ValueError as e:
+                QMessageBox.warning(self, '오류', str(e))
+                return
+            self._trigger_remote_wake_if_configured(mac)
+            QMessageBox.information(self, 'PC 켜기', '깨우기 신호를 보냈습니다')
+            self._start_power_on_polling(pairing)
+
+        self._ensure_connectivity(pairing, proceed)
 
     def _trigger_remote_wake_if_configured(self, mac: str):
         router = self.config.load_router_wol()
@@ -174,14 +235,20 @@ class MainWindow(QWidget):
         self._power_poll_timer.stop()
         if not pairing:
             return
-        self._power_poll_timer.start(_POWER_ON_POLL_INTERVAL_MS)
+        self._power_poll_started_at = time.monotonic()
+        self._power_poll_timer.start(_FAST_POWER_ON_POLL_INTERVAL_MS)
 
     def _poll_power_status(self):
         pairing = self.config.load_pairing()
 
         def on_result(is_on):
             if is_on:
-                self._power_poll_timer.stop()
+                return
+            elapsed_ms = (time.monotonic() - self._power_poll_started_at) * 1000
+            next_interval = (_FAST_POWER_ON_POLL_INTERVAL_MS
+                              if elapsed_ms < _FAST_POWER_ON_POLL_DURATION_MS
+                              else _POWER_ON_POLL_INTERVAL_MS)
+            self._power_poll_timer.start(next_interval)
 
         self._check_power_status(pairing, on_result)
 
@@ -228,18 +295,46 @@ class MainWindow(QWidget):
         self._request_shutdown(pairing, delay_seconds)
 
     def _request_shutdown(self, pairing, delay_seconds):
-        config = CompanionConfig(pairing['host'], pairing['port'], pairing['token'])
+        def proceed():
+            config = CompanionConfig(pairing['host'], pairing['port'], pairing['token'])
 
-        def on_done(result, error):
-            if error is not None:
-                message = str(error) if isinstance(error, CompanionError) else f'종료 요청 실패: {error}'
-                QMessageBox.warning(self, '오류', message)
-                return
-            self._on_shutdown_scheduled(delay_seconds or _QUICK_SHUTDOWN_SECONDS, pairing)
+            def on_done(result, error):
+                if error is not None:
+                    message = str(error) if isinstance(error, CompanionError) else f'종료 요청 실패: {error}'
+                    QMessageBox.warning(self, '오류', message)
+                    return
+                self._on_shutdown_scheduled(delay_seconds or _QUICK_SHUTDOWN_SECONDS, pairing)
 
-        self._bridges.append(run_async(lambda: companion_client.shutdown(config, delay_seconds), on_done))
+            self._bridges.append(run_async(lambda: companion_client.shutdown(config, delay_seconds), on_done))
+
+        self._ensure_connectivity(pairing, proceed)
+
+    def _schedule_wireguard_auto_off(self, delay_seconds):
+        """PC가 실제로 꺼지는 시점에 맞춰(예약 지연이 끝난 뒤) 와이어가드도
+        함께 끈다 — 종료 취소 시 그사이엔 여전히 PC에 붙어있어야 하므로,
+        예약을 걸 때 곧바로 끄지 않고 지연 시간만큼 기다렸다가 끈다."""
+        if self._wireguard_auto_off_timer is not None:
+            self._wireguard_auto_off_timer.stop()
+            self._wireguard_auto_off_timer = None
+        if not self.config.load_wireguard_conf() or not wireguard_client.is_up():
+            return
+
+        def on_timeout():
+            self._wireguard_auto_off_timer = None
+
+            def on_done(result, error):
+                self._refresh_wireguard_status()
+
+            self._bridges.append(run_async(wireguard_client.bring_down, on_done))
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(on_timeout)
+        timer.start(delay_seconds * 1000)
+        self._wireguard_auto_off_timer = timer
 
     def _on_shutdown_scheduled(self, delay_seconds, pairing):
+        self._schedule_wireguard_auto_off(delay_seconds)
         if delay_seconds <= _QUICK_SHUTDOWN_SECONDS:
             reply = QMessageBox(self)
             reply.setWindowTitle('PC 끄기')
@@ -268,6 +363,9 @@ class MainWindow(QWidget):
                 message = str(error) if isinstance(error, CompanionError) else f'취소 실패: {error}'
                 QMessageBox.warning(self, '오류', message)
                 return
+            if self._wireguard_auto_off_timer is not None:
+                self._wireguard_auto_off_timer.stop()
+                self._wireguard_auto_off_timer = None
             self.status_shutdown_label.hide()
             QMessageBox.information(self, 'PC 끄기', '예약된 종료를 취소했습니다')
 
