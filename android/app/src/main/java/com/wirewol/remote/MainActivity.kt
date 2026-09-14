@@ -434,18 +434,64 @@ class MainActivity : AppCompatActivity() {
     private fun requestShutdown(pairing: PairingConfig.Info, delaySeconds: Int?) {
         ensureConnectivity {
             Toast.makeText(this, R.string.shutdown_requesting, Toast.LENGTH_SHORT).show()
-            val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
-            Thread {
-                val result = companionClient.shutdown(config, delaySeconds)
-                handler.post {
-                    when (result) {
-                        is CompanionClient.Result.Success -> onShutdownScheduled(delaySeconds ?: QUICK_SHUTDOWN_SECONDS)
-                        is CompanionClient.Result.Failure ->
+            attemptShutdown(pairing, delaySeconds, allowWakeRetry = true)
+        }
+    }
+
+    // 컴패니언이 응답하지 않으면(PC가 절전 상태라 서버 프로세스 자체가
+    // 멈춰있는 경우일 수 있음) 매직 패킷으로 깨운 뒤 딱 한 번만 더 재시도한다
+    // — 절전이 아니라 진짜 꺼져있거나 페어링이 잘못된 경우엔 매직 패킷을
+    // 보내도 응답이 오지 않으니 wakeThenRetryShutdown의 타임아웃에서 그대로
+    // 실패로 끝난다.
+    private fun attemptShutdown(pairing: PairingConfig.Info, delaySeconds: Int?, allowWakeRetry: Boolean) {
+        val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
+        Thread {
+            val result = companionClient.shutdown(config, delaySeconds)
+            handler.post {
+                when (result) {
+                    is CompanionClient.Result.Success -> onShutdownScheduled(delaySeconds ?: QUICK_SHUTDOWN_SECONDS)
+                    is CompanionClient.Result.Failure -> {
+                        val mac = pairingConfig.loadMac()
+                        if (allowWakeRetry && mac.isNotBlank()) {
+                            wakeThenRetryShutdown(pairing, mac, delaySeconds)
+                        } else {
                             Toast.makeText(this, getString(R.string.shutdown_failed, result.message), Toast.LENGTH_LONG).show()
+                        }
                     }
                 }
-            }.start()
+            }
+        }.start()
+    }
+
+    // PC가 절전 상태일 때는 매직 패킷을 하드웨어(랜카드)가 직접 받아 깨우는
+    // 것만 가능하고, 컴패니언 서버는 OS가 완전히 깨어난 뒤에야 다시 요청에
+    // 응답할 수 있다 — 그래서 깨운 뒤 서버가 살아날 때까지 짧은 간격으로
+    // ping을 재시도하다가, 응답이 오는 즉시 종료 요청을 다시 보낸다.
+    private fun wakeThenRetryShutdown(pairing: PairingConfig.Info, mac: String, delaySeconds: Int?) {
+        sendWakeOnLan(mac)
+        triggerRemoteWakeIfConfigured(mac)
+        val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
+        val startedAt = System.currentTimeMillis()
+        val runnable = object : Runnable {
+            override fun run() {
+                Thread {
+                    val result = companionClient.ping(config)
+                    handler.post {
+                        when (result) {
+                            is CompanionClient.Result.Success -> attemptShutdown(pairing, delaySeconds, allowWakeRetry = false)
+                            is CompanionClient.Result.Failure -> {
+                                if (System.currentTimeMillis() - startedAt < WAKE_RETRY_TIMEOUT_MS) {
+                                    handler.postDelayed(this, WAKE_RETRY_POLL_INTERVAL_MS)
+                                } else {
+                                    Toast.makeText(this@MainActivity, R.string.shutdown_wake_timeout, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }
+                }.start()
+            }
         }
+        handler.postDelayed(runnable, WAKE_RETRY_POLL_INTERVAL_MS)
     }
 
     private fun onShutdownScheduled(delaySeconds: Int) {
@@ -569,5 +615,7 @@ class MainActivity : AppCompatActivity() {
         private const val FAST_POWER_ON_POLL_INTERVAL_MS = 1_000L
         private const val FAST_POWER_ON_POLL_DURATION_MS = 15_000L
         private const val AUTO_REFRESH_INTERVAL_MS = 5_000L
+        private const val WAKE_RETRY_POLL_INTERVAL_MS = 1_000L
+        private const val WAKE_RETRY_TIMEOUT_MS = 30_000L
     }
 }

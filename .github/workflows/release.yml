@@ -65,6 +65,7 @@ jobs:
           python -m PyInstaller `
             --onefile `
             --windowed `
+            --uac-admin `
             --icon "assets/client_icon.ico" `
             --add-binary "$pyzbarDir\libiconv.dll;." `
             --add-binary "$pyzbarDir\libzbar-64.dll;." `

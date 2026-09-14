@@ -34,6 +34,12 @@ _FAST_POWER_ON_POLL_INTERVAL_MS = 1_000
 _FAST_POWER_ON_POLL_DURATION_MS = 15_000
 _QUICK_SHUTDOWN_SECONDS = 10
 
+# 종료 요청이 실패했을 때(절전 상태일 수 있음) 매직 패킷으로 깨운 뒤
+# 컴패니언이 응답할 때까지 재시도하는 간격/최대 대기 시간 — android
+# MainActivity.kt의 WAKE_RETRY_POLL_INTERVAL_MS/WAKE_RETRY_TIMEOUT_MS와 대응.
+_WAKE_RETRY_POLL_INTERVAL_MS = 1_000
+_WAKE_RETRY_TIMEOUT_MS = 30_000
+
 # 창이 떠 있는 동안 PC 전원 상태를 5초마다 자동으로 재확인한다 — android
 # MainActivity.kt의 startAutoRefresh(onResume/onPause에 걸림)와 동일한
 # 동작으로, 버튼을 누르지 않아도 상태 표시가 계속 최신으로 유지된다.
@@ -84,6 +90,7 @@ class MainWindow(QWidget):
         self._power_poll_timer.setSingleShot(True)
         self._power_poll_timer.timeout.connect(self._poll_power_status)
         self._power_poll_started_at = None
+        self._wake_retry_timer = None  # 참조를 유지해야 timeout 전에 GC되지 않는다
 
         self._auto_refresh_timer = QTimer(self)
         self._auto_refresh_timer.timeout.connect(self._auto_refresh_tick)
@@ -319,18 +326,68 @@ class MainWindow(QWidget):
 
     def _request_shutdown(self, pairing, delay_seconds):
         def proceed():
-            config = CompanionConfig(pairing['host'], pairing['port'], pairing['token'])
-
-            def on_done(result, error):
-                if error is not None:
-                    message = str(error) if isinstance(error, CompanionError) else f'종료 요청 실패: {error}'
-                    QMessageBox.warning(self, '오류', message)
-                    return
-                self._on_shutdown_scheduled(delay_seconds or _QUICK_SHUTDOWN_SECONDS)
-
-            self._bridges.append(run_async(lambda: companion_client.shutdown(config, delay_seconds), on_done))
+            self._attempt_shutdown(pairing, delay_seconds, allow_wake_retry=True)
 
         self._ensure_connectivity(pairing, proceed)
+
+    def _attempt_shutdown(self, pairing, delay_seconds, allow_wake_retry):
+        """컴패니언이 응답하지 않으면(PC가 절전 상태라 서버 프로세스 자체가
+        멈춰있는 경우일 수 있음) 매직 패킷으로 깨운 뒤 딱 한 번만 더
+        재시도한다 — 절전이 아니라 진짜 꺼져있거나 페어링이 잘못된 경우엔
+        매직 패킷을 보내도 응답이 오지 않으니 _wake_then_retry_shutdown의
+        타임아웃에서 그대로 실패로 끝난다."""
+        config = CompanionConfig(pairing['host'], pairing['port'], pairing['token'])
+
+        def on_done(result, error):
+            if error is not None:
+                mac = pairing.get('mac', '')
+                if allow_wake_retry and mac:
+                    self._wake_then_retry_shutdown(pairing, mac, delay_seconds)
+                else:
+                    message = str(error) if isinstance(error, CompanionError) else f'종료 요청 실패: {error}'
+                    QMessageBox.warning(self, '오류', message)
+                return
+            self._on_shutdown_scheduled(delay_seconds or _QUICK_SHUTDOWN_SECONDS)
+
+        self._bridges.append(run_async(lambda: companion_client.shutdown(config, delay_seconds), on_done))
+
+    def _wake_then_retry_shutdown(self, pairing, mac, delay_seconds):
+        """PC가 절전 상태일 때는 매직 패킷을 하드웨어(랜카드)가 직접 받아
+        깨우는 것만 가능하고, 컴패니언 서버는 OS가 완전히 깨어난 뒤에야 다시
+        요청에 응답할 수 있다 — 그래서 깨운 뒤 서버가 살아날 때까지 짧은
+        간격으로 ping을 재시도하다가, 응답이 오는 즉시 종료 요청을 다시
+        보낸다."""
+        try:
+            wol.send_magic_packet(mac)
+        except ValueError:
+            pass
+        self._trigger_remote_wake_if_configured(mac)
+
+        config = CompanionConfig(pairing['host'], pairing['port'], pairing['token'])
+        started_at = time.monotonic()
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+
+        def poll():
+            def on_result(is_on):
+                if is_on:
+                    timer.stop()
+                    self._attempt_shutdown(pairing, delay_seconds, allow_wake_retry=False)
+                    return
+                elapsed_ms = (time.monotonic() - started_at) * 1000
+                if elapsed_ms < _WAKE_RETRY_TIMEOUT_MS:
+                    timer.start(_WAKE_RETRY_POLL_INTERVAL_MS)
+                else:
+                    self._wake_retry_timer = None
+                    QMessageBox.warning(self, '오류', 'PC가 응답하지 않아 종료할 수 없습니다'
+                                         '(절전 상태에서 깨우기에 실패했을 수 있습니다)')
+
+            self._check_power_status(pairing, on_result)
+
+        timer.timeout.connect(poll)
+        self._wake_retry_timer = timer
+        timer.start(_WAKE_RETRY_POLL_INTERVAL_MS)
 
     def _schedule_wireguard_auto_off(self, delay_seconds):
         """PC가 실제로 꺼지는 시점에 맞춰(예약 지연이 끝난 뒤) 와이어가드도

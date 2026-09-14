@@ -14,10 +14,10 @@ Windows 라이브러리가 없다 — 대신 사용자가 이미 설치했을 �
   새 .conf를 붙여넣었을 수 있음) 매번 새로 설치하는 편이 오래된 서비스가
   남아 꼬이는 것보다 낫다.
 
-터널 서비스를 설치/제거하려면 관리자 권한이 필요하다 — windows/app/tray.py의
-_run_elevated_schtasks와 동일하게 그 순간만 PowerShell Start-Process
--Verb RunAs로 상승시킨다(클라이언트 앱 전체를 관리자 권한으로 띄우지 않기
-위함).
+터널 서비스를 설치/제거하려면 관리자 권한이 필요하다 — 매번 UAC 승인을
+띄우지 않도록 클라이언트 앱 자체를 시작 시 한 번만 관리자 권한으로
+재실행해두므로(wirewol_client.pyw 참고), 여기서는 별도 상승 없이 그냥
+실행한다.
 """
 import os
 import subprocess
@@ -38,17 +38,8 @@ def find_wireguard_exe() -> str | None:
     return None
 
 
-def _run_elevated(args) -> bool:
-    full_arg_line = subprocess.list2cmdline(args[1:])
-    ps_literal = "'" + full_arg_line.replace("'", "''") + "'"
-    exe_literal = "'" + args[0].replace("'", "''") + "'"
-    ps_cmd = (
-        f'$p = Start-Process -FilePath {exe_literal} -ArgumentList {ps_literal} '
-        f'-Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode'
-    )
-    result = subprocess.run(
-        ['powershell', '-NoProfile', '-Command', ps_cmd],
-        capture_output=True, creationflags=_NO_WINDOW)
+def _run(args) -> bool:
+    result = subprocess.run(args, capture_output=True, creationflags=_NO_WINDOW)
     return result.returncode == 0
 
 
@@ -67,8 +58,8 @@ def bring_up(conf_text: str):
     with open(conf_path, 'w', encoding='utf-8') as f:
         f.write(conf_text)
     try:
-        if not _run_elevated([wireguard_exe, '/installtunnelservice', conf_path]):
-            raise WireGuardError('WireGuard 터널을 시작할 수 없습니다(관리자 권한 승인이 취소되었을 수 있습니다)')
+        if not _run([wireguard_exe, '/installtunnelservice', conf_path]):
+            raise WireGuardError('WireGuard 터널을 시작할 수 없습니다')
     finally:
         try:
             os.remove(conf_path)
@@ -80,5 +71,5 @@ def bring_down():
     wireguard_exe = find_wireguard_exe()
     if not wireguard_exe:
         raise WireGuardError('공식 WireGuard 클라이언트가 설치되어 있지 않습니다 (wireguard.com/install)')
-    if not _run_elevated([wireguard_exe, '/uninstalltunnelservice', _TUNNEL_NAME]):
-        raise WireGuardError('WireGuard 터널을 끌 수 없습니다(관리자 권한 승인이 취소되었을 수 있습니다)')
+    if not _run([wireguard_exe, '/uninstalltunnelservice', _TUNNEL_NAME]):
+        raise WireGuardError('WireGuard 터널을 끌 수 없습니다')
