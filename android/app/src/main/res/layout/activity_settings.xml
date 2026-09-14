@@ -128,6 +128,15 @@
             android:background="@color/ww_surface" />
 
         <Button
+            android:id="@+id/showPairingQrButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:backgroundTint="@color/ww_surface"
+            android:text="@string/show_pairing_qr"
+            android:textAllCaps="false"
+            android:textColor="@color/ww_text" />
+
+        <Button
             android:id="@+id/clearAllButton"
             style="?android:attr/borderlessButtonStyle"
             android:layout_width="match_parent"

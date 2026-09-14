@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+wirewol_client_secrets.dat

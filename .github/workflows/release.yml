@@ -42,6 +42,41 @@ jobs:
           name: windows-exe
           path: windows/dist/WireWOL_${{ github.ref_name }}.exe
 
+  build-client:
+    runs-on: windows-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: 의존성 설치
+        run: |
+          pip install pyinstaller PyQt5 requests pywin32 opencv-python pyzbar
+
+      - name: exe 빌드
+        working-directory: client
+        run: |
+          $pyzbarDir = python -c "import pyzbar, os; print(os.path.dirname(pyzbar.__file__))"
+          python -m PyInstaller `
+            --onefile `
+            --windowed `
+            --icon "assets/client_icon.ico" `
+            --add-binary "$pyzbarDir\libiconv.dll;." `
+            --add-binary "$pyzbarDir\libzbar-64.dll;." `
+            --name "WireWOLClient_${{ github.ref_name }}" `
+            "wirewol_client.pyw"
+
+      - name: exe 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-exe
+          path: client/dist/WireWOLClient_${{ github.ref_name }}.exe
+
   build-android:
     runs-on: ubuntu-latest
 
@@ -86,14 +121,20 @@ jobs:
           path: android/app/build/outputs/apk/release/app-release.apk
 
   release:
-    needs: [build-windows, build-android]
+    needs: [build-windows, build-client, build-android]
     runs-on: ubuntu-latest
 
     steps:
-      - name: exe 다운로드
+      - name: 컴패니언 exe 다운로드
         uses: actions/download-artifact@v4
         with:
           name: windows-exe
+          path: dist
+
+      - name: 클라이언트 exe 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: client-exe
           path: dist
 
       - name: apk 다운로드
@@ -129,4 +170,5 @@ jobs:
           name: ${{ github.ref_name }}
           files: |
             dist/WireWOL_${{ github.ref_name }}.exe
+            dist/WireWOLClient_${{ github.ref_name }}.exe
             dist/WireWOLAndroid_${{ github.ref_name }}.apk
