@@ -59,6 +59,11 @@ class MainActivity : AppCompatActivity() {
     // 화면을 벗어나면(onPause) 죽은 액티비티를 참조하지 않도록 반드시 멈춘다.
     private var powerPollRunnable: Runnable? = null
 
+    // 리모컨 화면이 떠 있는 동안 PC 전원 상태를 5초마다 자동으로 재확인하는
+    // 콜백 — 버튼을 누르지 않고 화면만 보고 있어도 상태가 최신으로 유지되게
+    // 한다. powerPollRunnable과 마찬가지로 onPause에서 반드시 멈춘다.
+    private var autoRefreshRunnable: Runnable? = null
+
     // 예약된 종료가 실제로 실행되는 시점에 와이어가드를 끄기 위한 지연 콜백 —
     // 종료가 취소되면 cancelPendingShutdown에서 함께 취소된다.
     private var wireGuardAutoOffRunnable: Runnable? = null
@@ -117,11 +122,33 @@ class MainActivity : AppCompatActivity() {
         // 지금 막 비동기로 되살리는 중일 수 있다 — 그 결과를 놓치지 않도록
         // 잠깐 뒤에 와이어가드 상태만 한 번 더 확인한다.
         handler.postDelayed({ refreshWireGuardStatus() }, WIREGUARD_STATUS_RECHECK_DELAY_MS)
+        startAutoRefresh()
     }
 
     override fun onPause() {
         super.onPause()
         stopPowerOnPolling()
+        stopAutoRefresh()
+    }
+
+    private fun startAutoRefresh() {
+        stopAutoRefresh()
+        val runnable = object : Runnable {
+            override fun run() {
+                // PC 켜기 폴링이 이미 돌고 있으면 같은 요청이 중복되니 건너뛴다.
+                if (powerPollRunnable == null) {
+                    checkPowerStatus(pairingConfig.load())
+                }
+                handler.postDelayed(this, AUTO_REFRESH_INTERVAL_MS)
+            }
+        }
+        autoRefreshRunnable = runnable
+        handler.postDelayed(runnable, AUTO_REFRESH_INTERVAL_MS)
+    }
+
+    private fun stopAutoRefresh() {
+        autoRefreshRunnable?.let { handler.removeCallbacks(it) }
+        autoRefreshRunnable = null
     }
 
     private fun updateStatus() {
@@ -532,5 +559,6 @@ class MainActivity : AppCompatActivity() {
         private const val POWER_ON_POLL_INTERVAL_MS = 5_000L
         private const val FAST_POWER_ON_POLL_INTERVAL_MS = 1_000L
         private const val FAST_POWER_ON_POLL_DURATION_MS = 15_000L
+        private const val AUTO_REFRESH_INTERVAL_MS = 5_000L
     }
 }
