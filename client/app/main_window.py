@@ -10,6 +10,7 @@
 import socket
 import threading
 import time
+from datetime import datetime
 
 from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -32,6 +33,11 @@ _POWER_ON_POLL_INTERVAL_MS = 5_000
 _FAST_POWER_ON_POLL_INTERVAL_MS = 1_000
 _FAST_POWER_ON_POLL_DURATION_MS = 15_000
 _QUICK_SHUTDOWN_SECONDS = 10
+
+# 창이 떠 있는 동안 PC 전원 상태를 5초마다 자동으로 재확인한다 — android
+# MainActivity.kt의 startAutoRefresh(onResume/onPause에 걸림)와 동일한
+# 동작으로, 버튼을 누르지 않아도 상태 표시가 계속 최신으로 유지된다.
+_AUTO_REFRESH_INTERVAL_MS = 5_000
 _CONNECTIVITY_PROBE_TIMEOUT_SECONDS = 1.5
 
 
@@ -79,6 +85,16 @@ class MainWindow(QWidget):
         self._power_poll_timer.timeout.connect(self._poll_power_status)
         self._power_poll_started_at = None
 
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.timeout.connect(self._auto_refresh_tick)
+        self._auto_refresh_timer.start(_AUTO_REFRESH_INTERVAL_MS)
+
+        # 앱을 켜고 전원 상태를 실제로 한 번이라도 확인했는지 — 최초 확인
+        # 때만 "확인 중..."을 잠깐 보여주고, 그 이후(자동 재확인/PC 켜기
+        # 폴링 등 반복 확인)에는 결과가 올 때까지 직전 상태를 그대로 유지한
+        # 채 조용히 백그라운드에서 확인하다가 값이 나오면 그때 갱신한다.
+        self._has_checked_power_once = False
+
         # 예약된 종료가 실제로 실행되는 시점에 와이어가드를 끄기 위한 지연
         # 타이머 — 종료가 취소되면 _cancel_pending_shutdown에서 멈춘다.
         self._wireguard_auto_off_timer = None
@@ -123,8 +139,8 @@ class MainWindow(QWidget):
         settings_button.clicked.connect(self._on_settings_clicked)
         layout.addWidget(settings_button)
 
-        self._pending_shutdown_target = None
         self._refresh_status()
+        self._update_pending_shutdown_status()
 
     # ---- 상태 표시 ----
 
@@ -136,6 +152,11 @@ class MainWindow(QWidget):
         self.status_mac_label.setText(f'MAC: {mac}' if mac else 'MAC: 없음')
         self._refresh_wireguard_status()
         self._check_power_status(pairing)
+
+    def _auto_refresh_tick(self):
+        # PC 켜기 폴링이 이미 돌고 있으면 같은 요청이 중복되니 건너뛴다.
+        if not self._power_poll_timer.isActive():
+            self._check_power_status(self.config.load_pairing())
 
     def _refresh_wireguard_status(self):
         if not self.config.load_wireguard_conf():
@@ -153,10 +174,12 @@ class MainWindow(QWidget):
             if on_result:
                 on_result(False)
             return
-        self.status_power_label.setText('전원: 확인 중...')
+        if not self._has_checked_power_once:
+            self.status_power_label.setText('전원: 확인 중...')
         config = CompanionConfig(pairing['host'], pairing['port'], pairing['token'])
 
         def on_done(result, error):
+            self._has_checked_power_once = True
             if error is None:
                 self.status_power_label.setText('전원: 켜짐')
                 if on_result:
@@ -303,7 +326,7 @@ class MainWindow(QWidget):
                     message = str(error) if isinstance(error, CompanionError) else f'종료 요청 실패: {error}'
                     QMessageBox.warning(self, '오류', message)
                     return
-                self._on_shutdown_scheduled(delay_seconds or _QUICK_SHUTDOWN_SECONDS, pairing)
+                self._on_shutdown_scheduled(delay_seconds or _QUICK_SHUTDOWN_SECONDS)
 
             self._bridges.append(run_async(lambda: companion_client.shutdown(config, delay_seconds), on_done))
 
@@ -333,7 +356,9 @@ class MainWindow(QWidget):
         timer.start(delay_seconds * 1000)
         self._wireguard_auto_off_timer = timer
 
-    def _on_shutdown_scheduled(self, delay_seconds, pairing):
+    def _on_shutdown_scheduled(self, delay_seconds):
+        self.config.save_pending_shutdown_at(time.time() + delay_seconds)
+        self._update_pending_shutdown_status()
         self._schedule_wireguard_auto_off(delay_seconds)
         if delay_seconds <= _QUICK_SHUTDOWN_SECONDS:
             reply = QMessageBox(self)
@@ -343,19 +368,35 @@ class MainWindow(QWidget):
             reply.addButton(QMessageBox.Ok)
             reply.exec_()
             if reply.clickedButton() == cancel_button:
-                self._cancel_pending_shutdown(pairing)
+                self._cancel_pending_shutdown()
                 return
         else:
             minutes = delay_seconds // 60
             QMessageBox.information(self, 'PC 끄기', f'{minutes}분 후 종료가 예약되었습니다')
-        self.status_shutdown_label.setText('예약된 종료가 있습니다 (클릭하여 취소)')
+
+    # 예약된 종료가 남아있으면(창을 닫았다가 다시 열어도) 상태 카드에 시각과
+    # 함께 보여준다 — android의 updatePendingShutdownStatus와 동일하게,
+    # 이미 지난 시각이면 조용히 정리한다.
+    def _update_pending_shutdown_status(self):
+        target = self.config.load_pending_shutdown_at()
+        if not target or target <= time.time():
+            self.status_shutdown_label.hide()
+            if target:
+                self.config.clear_pending_shutdown_at()
+            return
+        time_label = datetime.fromtimestamp(target).strftime('%H:%M')
+        self.status_shutdown_label.setText(f'{time_label}에 종료 예약됨 (클릭하여 취소)')
         self.status_shutdown_label.show()
         try:
-            self.status_shutdown_label.mousePressEvent = lambda event: self._cancel_pending_shutdown(pairing)
+            self.status_shutdown_label.mousePressEvent = lambda event: self._cancel_pending_shutdown()
         except Exception:
             pass
 
-    def _cancel_pending_shutdown(self, pairing):
+    def _cancel_pending_shutdown(self):
+        pairing = self.config.load_pairing()
+        if not pairing:
+            QMessageBox.warning(self, '오류', '연결 정보가 없습니다')
+            return
         config = CompanionConfig(pairing['host'], pairing['port'], pairing['token'])
 
         def on_done(result, error):
@@ -366,7 +407,8 @@ class MainWindow(QWidget):
             if self._wireguard_auto_off_timer is not None:
                 self._wireguard_auto_off_timer.stop()
                 self._wireguard_auto_off_timer = None
-            self.status_shutdown_label.hide()
+            self.config.clear_pending_shutdown_at()
+            self._update_pending_shutdown_status()
             QMessageBox.information(self, 'PC 끄기', '예약된 종료를 취소했습니다')
 
         self._bridges.append(run_async(lambda: companion_client.cancel_shutdown(config), on_done))

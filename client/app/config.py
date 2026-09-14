@@ -12,17 +12,32 @@
 """
 import json
 import os
+import shutil
 import sys
 
 import win32crypt
 
 if getattr(sys, 'frozen', False):
-    _BASE_DIR = os.path.dirname(sys.executable)
+    _PROGRAM_DIR = os.path.dirname(sys.executable)
 else:
     # app/config.py -> app -> client (wirewol_client.pyw와 같은 위치)
-    _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _PROGRAM_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-SECRETS_FILE = os.path.join(_BASE_DIR, 'wirewol_client_secrets.dat')
+# 프로그램 폴더는 exe를 옮기거나 재설치하면서 쉽게 사라지고, 탐색기에서도
+# 바로 눈에 띄어 DPAPI로 암호화되어 있다는 걸 몰라도 파일 존재 자체가
+# 노출된다 — 실제 저장 위치는 사용자별 숨김 폴더(AppData\Local)로 옮긴다.
+_DATA_DIR = os.path.join(os.environ['LOCALAPPDATA'], 'WireWOL Client')
+os.makedirs(_DATA_DIR, exist_ok=True)
+SECRETS_FILE = os.path.join(_DATA_DIR, 'wirewol_client_secrets.dat')
+
+# 예전 버전(프로그램 폴더에 저장)에서 업그레이드한 사용자의 기존 설정을
+# 잃지 않도록, 새 위치에 파일이 없고 옛 위치에 있으면 그대로 옮겨온다.
+_legacy_secrets_file = os.path.join(_PROGRAM_DIR, 'wirewol_client_secrets.dat')
+if not os.path.exists(SECRETS_FILE) and os.path.exists(_legacy_secrets_file):
+    try:
+        shutil.move(_legacy_secrets_file, SECRETS_FILE)
+    except OSError:
+        pass
 
 DEFAULT_ROUTER_PORT = '443'
 
@@ -115,6 +130,22 @@ class ClientConfig:
 
     def clear_wireguard_conf(self):
         self._data.pop('wireguard_conf', None)
+        self._save()
+
+    # ---- 예약된 종료 시각 ----
+    # android의 shutdownPrefs(KEY_PENDING_SHUTDOWN)에 대응 — 창을 닫았다가
+    # 다시 열어도(onResume에 해당) 예약된 종료가 남아있으면 상태 표시와
+    # "클릭하여 취소"를 그대로 되살릴 수 있게 저장해둔다.
+
+    def load_pending_shutdown_at(self) -> float | None:
+        return self._data.get('pending_shutdown_at')
+
+    def save_pending_shutdown_at(self, target_epoch_seconds: float):
+        self._data['pending_shutdown_at'] = target_epoch_seconds
+        self._save()
+
+    def clear_pending_shutdown_at(self):
+        self._data.pop('pending_shutdown_at', None)
         self._save()
 
     # ---- 전체 초기화 ----

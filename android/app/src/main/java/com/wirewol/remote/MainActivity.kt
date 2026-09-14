@@ -73,6 +73,12 @@ class MainActivity : AppCompatActivity() {
     // "예약된 종료" 표시줄을 계속 보여주기 위해 액티비티 밖에 남겨둔다.
     private val shutdownPrefs by lazy { getSharedPreferences("shutdown_prefs", Context.MODE_PRIVATE) }
 
+    // 앱을 켜고 나서 전원 상태를 실제로 한 번이라도 확인했는지 — 최초
+    // 확인 때만 "확인 중..."을 잠깐 보여주고, 그 이후(자동 재확인/PC 켜기
+    // 폴링 등 반복 확인)에는 결과가 올 때까지 직전 상태를 그대로 유지한 채
+    // 조용히 백그라운드에서 확인하다가 값이 나오면 그때 갱신한다.
+    private var hasCheckedPowerOnce = false
+
     private val vpnPermissionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         val after = pendingAfterVpnPermission
         pendingAfterVpnPermission = null
@@ -190,11 +196,14 @@ class MainActivity : AppCompatActivity() {
             onResult?.invoke(false)
             return
         }
-        setPowerStatus(R.string.status_power_checking, R.color.ww_hint)
+        if (!hasCheckedPowerOnce) {
+            setPowerStatus(R.string.status_power_checking, R.color.ww_hint)
+        }
         val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
         Thread {
             val result = companionClient.ping(config)
             handler.post {
+                hasCheckedPowerOnce = true
                 when (result) {
                     is CompanionClient.Result.Success -> {
                         setPowerStatus(R.string.status_power_on, R.color.ww_accent_green)

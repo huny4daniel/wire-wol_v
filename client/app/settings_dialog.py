@@ -6,13 +6,14 @@
 수 있어 예전 MAC 전용 입력의 상위 호환)."""
 import json
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialog, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout,
 )
 
 from app.config import ClientConfig
-from app.qr_scan import QrScanDialog, decode_qr_from_file
+from app.qr_scan import QrScanDialog, decode_qr_from_file, generate_qr_pixmap
 
 
 class SettingsDialog(QDialog):
@@ -56,12 +57,54 @@ class SettingsDialog(QDialog):
         file_button.clicked.connect(self._on_load_pairing_qr_file)
         manual_button = QPushButton('직접 입력')
         manual_button.clicked.connect(self._on_manual_pairing_entry)
+        export_button = QPushButton('QR로 설정 내보내기')
+        export_button.clicked.connect(self._on_show_pairing_qr)
         row.addWidget(apply_button)
         row.addWidget(scan_button)
         row.addWidget(file_button)
         row.addWidget(manual_button)
+        row.addWidget(export_button)
         v.addLayout(row)
         return group
+
+    # 저장된 설정(연결 정보 + 있으면 WireGuard/원격 WOL)을 통째로 QR로
+    # 보여준다 — android의 showPairingQrDialog와 동일한 스키마({host, port,
+    # token, mac, wireguard_conf?, router_wol?})라서 안드로이드 앱이나 다른
+    # 데스크톱 클라이언트가 이 QR을 그대로 스캔해 페어링할 수 있다. 토큰/공유기
+    # 비밀번호가 노출되니 신뢰할 수 있는 화면에서만 띄우도록 경고를 함께 둔다.
+    def _on_show_pairing_qr(self):
+        pairing = self.config.load_pairing()
+        if not pairing:
+            QMessageBox.warning(self, '오류', '먼저 PC 등록을 완료하세요')
+            return
+        payload = {
+            'host': pairing['host'],
+            'port': pairing['port'],
+            'token': pairing['token'],
+            'mac': pairing.get('mac', ''),
+        }
+        conf = self.config.load_wireguard_conf()
+        if conf:
+            payload['wireguard_conf'] = conf
+        router = self.config.load_router_wol()
+        if router:
+            payload['router_wol'] = router
+        text = json.dumps(payload, ensure_ascii=False)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle('설정 내보내기 QR')
+        layout = QVBoxLayout(dialog)
+        image_label = QLabel()
+        image_label.setPixmap(generate_qr_pixmap(text))
+        image_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(image_label)
+        warning_label = QLabel('이 QR에는 토큰/MAC 등 민감한 정보가 포함되어 있으니, 신뢰할 수 있는 화면에서만 보여주고 바로 닫으세요')
+        warning_label.setWordWrap(True)
+        layout.addWidget(warning_label)
+        close_button = QPushButton('닫기')
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        dialog.exec_()
 
     def _on_apply_pairing_json(self):
         self._apply_pairing_json(self.pairing_json_edit.toPlainText())

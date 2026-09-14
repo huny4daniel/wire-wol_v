@@ -1,7 +1,10 @@
 """웹캠으로 QR 코드를 스캔하는 모달 창 — 트레이가 보여주는 페어링/WireGuard
 QR을 PC 카메라로 직접 찍어 입력할 수 있게 한다(붙여넣기가 번거로울 때의
 대안 경로)."""
+import io
+
 import cv2
+import qrcode
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout
@@ -18,6 +21,18 @@ def decode_qr_from_file(path: str) -> str | None:
     if not codes:
         return None
     return codes[0].data.decode('utf-8', errors='replace')
+
+
+def generate_qr_pixmap(text: str, size: int = 280) -> QPixmap:
+    """android의 "QR로 설정 내보내기"에 대응 — 저장된 설정을 다른 기기가
+    다시 스캔할 수 있는 QR 이미지로 만든다(windows/ 트레이의 _pairing_payload
+    와 동일하게 qrcode 패키지를 쓴다)."""
+    img = qrcode.make(text).resize((size, size))
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG')
+    pixmap = QPixmap()
+    pixmap.loadFromData(buffer.getvalue(), 'PNG')
+    return pixmap
 
 
 class QrScanDialog(QDialog):
