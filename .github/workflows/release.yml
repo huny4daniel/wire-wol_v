@@ -56,7 +56,7 @@ jobs:
 
       - name: 의존성 설치
         run: |
-          pip install pyinstaller PyQt5 requests pywin32 opencv-python pyzbar
+          pip install pyinstaller PyQt5 requests pywin32 opencv-python pyzbar qrcode Pillow
 
       - name: exe 빌드
         working-directory: client
