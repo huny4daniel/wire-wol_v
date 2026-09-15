@@ -46,14 +46,19 @@ _WAKE_RETRY_TIMEOUT_MS = 30_000
 _AUTO_REFRESH_INTERVAL_MS = 5_000
 _CONNECTIVITY_PROBE_TIMEOUT_SECONDS = 1.5
 
+# WireGuard를 자동으로 켠 직후 터널이 자리 잡을 시간을 벌기 위한 컴패니언
+# 연결 시도의 제한 시간 — android MainActivity.kt의
+# TUNNEL_SETTLE_PROBE_TIMEOUT_MS와 대응.
+_TUNNEL_SETTLE_PROBE_TIMEOUT_SECONDS = 3.0
 
-def _is_reachable_directly(host: str, port: int) -> bool:
+
+def _is_reachable_directly(host: str, port, timeout: float = _CONNECTIVITY_PROBE_TIMEOUT_SECONDS) -> bool:
     """WireGuard 없이 컴패니언 포트로 짧게 직접 연결을 찔러본다 — 지금 집
     안(또는 이미 도달 가능한 상태)인지 판단하는 용도. Wi-Fi 이름(SSID) 비교
     대신 이 방식을 쓰는 이유는 별도 권한이 필요 없고, "실제로 닿는가"만
     보므로 더 정확하기 때문이다(android 앱의 NetworkProbe와 동일한 방식)."""
     try:
-        with socket.create_connection((host, port), timeout=_CONNECTIVITY_PROBE_TIMEOUT_SECONDS):
+        with socket.create_connection((host, port), timeout=timeout):
             return True
     except OSError:
         return False
@@ -224,7 +229,16 @@ class MainWindow(QWidget):
                 self._refresh_wireguard_status()
                 on_ready()
 
-            self._bridges.append(run_async(lambda: wireguard_client.bring_up(conf), on_bring_up_done))
+            # bring_up이 반환된 직후엔 터널이 아직 트래픽을 통과시키지 못해,
+            # 곧바로 보낸 공유기 원격 WOL 요청이 실패하는 경우가 있다 —
+            # android와 동일하게 컴패니언에 3초짜리 연결 시도를 한 번 거친 뒤
+            # on_ready로 넘어간다. 결과는 보지 않는다(PC가 꺼져 있으면 실패하는
+            # 게 정상이라, 터널이 자리 잡을 시간을 버는 용도일 뿐이다).
+            def bring_up_and_wait():
+                wireguard_client.bring_up(conf)
+                _is_reachable_directly(pairing['host'], pairing['port'], _TUNNEL_SETTLE_PROBE_TIMEOUT_SECONDS)
+
+            self._bridges.append(run_async(bring_up_and_wait, on_bring_up_done))
 
         self._bridges.append(run_async(lambda: _is_reachable_directly(pairing['host'], pairing['port']), on_probe_done))
 

@@ -14,11 +14,11 @@ import java.net.Socket
 object NetworkProbe {
     private const val TIMEOUT_MS = 1_500
 
-    fun isReachableDirectly(host: String, port: Int): Boolean {
+    fun isReachableDirectly(host: String, port: Int, timeoutMs: Int = TIMEOUT_MS): Boolean {
         if (port <= 0) return false
         return try {
             Socket().use { socket ->
-                socket.connect(InetSocketAddress(host, port), TIMEOUT_MS)
+                socket.connect(InetSocketAddress(host, port), timeoutMs)
                 true
             }
         } catch (e: Exception) {

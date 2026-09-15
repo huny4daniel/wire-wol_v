@@ -84,6 +84,7 @@ class MainActivity : AppCompatActivity() {
         pendingAfterVpnPermission = null
         Thread {
             val ok = wireGuard.bringUp()
+            if (ok && after != null) waitForTunnelReady()
             handler.post {
                 if (!ok) Toast.makeText(this, R.string.wireguard_failed, Toast.LENGTH_LONG).show()
                 refreshWireGuardStatus()
@@ -296,6 +297,7 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     Thread {
                         val ok = wireGuard.bringUp()
+                        if (ok) waitForTunnelReady()
                         handler.post {
                             if (!ok) Toast.makeText(this, R.string.wireguard_auto_connect_failed, Toast.LENGTH_SHORT).show()
                             refreshWireGuardStatus()
@@ -305,6 +307,17 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    // bringUp()이 반환된 직후엔 VPN 라우팅 전환과 핸드셰이크가 아직 끝나지
+    // 않아, 곧바로 보낸 공유기 원격 WOL 요청이 실패하는 경우가 있다 —
+    // mobile-hub-viewer_v(probeLoop)와 똑같이 터널을 올린 뒤 컴패니언에
+    // 3초짜리 연결 시도를 한 번 거치고 나서 다음 동작으로 넘어간다. 결과는
+    // 보지 않는다(PC가 꺼져 있으면 실패하는 게 정상이라, 이 시도는 터널이
+    // 자리 잡을 시간을 버는 용도일 뿐이다). 백그라운드 스레드에서만 호출할 것.
+    private fun waitForTunnelReady() {
+        val pairing = pairingConfig.load() ?: return
+        NetworkProbe.isReachableDirectly(pairing.host, pairing.port.toIntOrNull() ?: 0, TUNNEL_SETTLE_PROBE_TIMEOUT_MS)
     }
 
     // PC가 꺼져있어도 눌러서 깨울 수 있도록 매직 패킷을 보낸다(Wake-on-LAN).
@@ -617,5 +630,6 @@ class MainActivity : AppCompatActivity() {
         private const val AUTO_REFRESH_INTERVAL_MS = 5_000L
         private const val WAKE_RETRY_POLL_INTERVAL_MS = 1_000L
         private const val WAKE_RETRY_TIMEOUT_MS = 30_000L
+        private const val TUNNEL_SETTLE_PROBE_TIMEOUT_MS = 3_000
     }
 }
