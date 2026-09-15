@@ -98,6 +98,12 @@ jobs:
 
       - name: Android SDK 설치
         uses: android-actions/setup-android@v3
+        with:
+          # 기본값('tools platform-tools')의 옛 'tools' 패키지가 최신 cmdline-tools에는
+          # 없어 "Failed to find package 'tools'"로 실패한다(mobile-hub-viewer_v에서도
+          # 실제로 겪음). 플랫폼·빌드 도구는 Gradle이 빌드 중 알아서 받으므로
+          # platform-tools만 설치한다.
+          packages: 'platform-tools'
 
       - name: 릴리즈 서명 키 복원
         working-directory: android
