@@ -5,19 +5,16 @@ import android.os.Bundle
 import android.text.InputType
 import android.widget.Button
 import android.widget.EditText
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
-import com.journeyapps.barcodescanner.BarcodeEncoder
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import org.json.JSONObject
@@ -107,7 +104,6 @@ class SettingsActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.backButton).setOnClickListener { finish() }
         findViewById<Button>(R.id.scanPairingButton).setOnClickListener { launchScan(ScanTarget.PAIRING) }
-        findViewById<Button>(R.id.showPairingQrButton).setOnClickListener { showPairingQrDialog() }
         findViewById<Button>(R.id.scanWireGuardButton).setOnClickListener { launchScan(ScanTarget.WIREGUARD) }
         findViewById<Button>(R.id.routerWolSettingsButton).setOnClickListener { showRouterWolSettingsDialog() }
         findViewById<Button>(R.id.clearAllButton).setOnClickListener { showClearAllDialog() }
@@ -195,62 +191,6 @@ class SettingsActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Toast.makeText(this, R.string.pairing_invalid, Toast.LENGTH_SHORT).show()
         }
-    }
-
-    // 이미 폰에 저장된 설정을 통째로 QR로 보여준다 — 컴퓨터용 클라이언트 앱을
-    // 새로 설정할 때, PC 트레이나 공유기 QR을 다시 찾지 않고 폰 화면만 비춰서
-    // 한 번에 페어링할 수 있게 한다. 연결 정보({host, port, token, mac})는 PC
-    // 트레이 QR과 완전히 같은 스키마이고, 그 위에 WireGuard 설정/원격 WOL
-    // 자격 증명이 있으면 선택적으로 덧붙인다 — 컴퓨터 클라이언트 쪽
-    // `_apply_pairing_json`이 이 확장 필드까지 함께 읽는다.
-    //
-    // 원격 WOL은 공유기 관리자 아이디/비밀번호라 QR에 실리는 순간 노출
-    // 위험이 커진다는 걸 사용자가 감수하고 요청한 것 — 신뢰할 수 있는
-    // 화면에서만 띄우고 바로 닫도록 안내한다.
-    private fun showPairingQrDialog() {
-        val pairing = pairingConfig.load()
-        if (pairing == null) {
-            Toast.makeText(this, R.string.show_pairing_qr_missing, Toast.LENGTH_SHORT).show()
-            return
-        }
-        val payload = JSONObject().apply {
-            put("host", pairing.host)
-            put("port", pairing.port.toIntOrNull() ?: pairing.port)
-            put("token", pairing.token)
-            put("mac", pairing.mac)
-            wireGuard.loadConfigText()?.let { put("wireguard_conf", it) }
-            routerWol.loadConfig()?.let { router ->
-                put("router_wol", JSONObject().apply {
-                    put("host", router.host)
-                    put("port", router.port)
-                    put("id", router.id)
-                    put("password", router.password)
-                })
-            }
-        }.toString()
-
-        val size = (240 * resources.displayMetrics.density).toInt()
-        val bitmap = BarcodeEncoder().encodeBitmap(payload, BarcodeFormat.QR_CODE, size, size)
-        val padding = (16 * resources.displayMetrics.density).toInt()
-        val imageView = ImageView(this).apply {
-            setImageBitmap(bitmap)
-            setPadding(padding, padding, padding, 0)
-        }
-        val warningText = TextView(this).apply {
-            text = getString(R.string.show_pairing_qr_warning)
-            setPadding(padding, padding / 2, padding, padding / 2)
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(imageView)
-            addView(warningText)
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle(R.string.show_pairing_qr)
-            .setView(container)
-            .setPositiveButton(android.R.string.ok, null)
-            .show()
     }
 
     // WireGuard 설정 QR(공유기/공식 앱이 만든 것)은 표준 .conf 텍스트가 그대로

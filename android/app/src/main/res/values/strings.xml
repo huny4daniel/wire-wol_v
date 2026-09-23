@@ -28,9 +28,6 @@
     <string name="status_wireguard_down">WireGuard: 연결 안 됨</string>
 
     <string name="scan_pairing">PC 등록</string>
-    <string name="show_pairing_qr">QR로 설정 내보내기</string>
-    <string name="show_pairing_qr_missing">먼저 연결 정보를 스캔해주세요</string>
-    <string name="show_pairing_qr_warning">연결 정보뿐 아니라 저장된 WireGuard 설정, 원격 WOL(공유기) 아이디/비밀번호까지 이 QR 하나에 담깁니다. 신뢰할 수 있는 곳에서만 보여주고, 사용 후 바로 닫으세요.</string>
     <string name="wireguard_scan_button">WireGuard 설정 스캔</string>
     <string name="router_wol_open_settings">원격(외부망) WOL 설정</string>
     <string name="clear_all">저장된 정보 초기화</string>

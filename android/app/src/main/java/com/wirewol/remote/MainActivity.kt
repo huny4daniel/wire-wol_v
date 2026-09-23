@@ -64,19 +64,27 @@ class MainActivity : AppCompatActivity() {
     // 한다. powerPollRunnable과 마찬가지로 onPause에서 반드시 멈춘다.
     private var autoRefreshRunnable: Runnable? = null
 
-    // 예약된 종료가 실제로 실행되는 시점에 와이어가드를 끄기 위한 지연 콜백 —
-    // 종료가 취소되면 cancelPendingShutdown에서 함께 취소된다.
-    private var wireGuardAutoOffRunnable: Runnable? = null
+    // PC 끄기가 성공한 뒤 PC가 실제로 꺼졌는지(ping 무응답) 확인되면 그때
+    // 와이어가드를 끄기 위한 감시 콜백 — 종료 취소, 와이어가드 켜기/끄기, PC
+    // 켜기를 누르면 감시 자체를 해제한다(clearWireGuardOffWatch).
+    private var wireGuardOffWatchRunnable: Runnable? = null
+    private var wireGuardOffWatchInFlight = false
+
+    // 화면을 켜둔 채로 예약 시각이 지나면 "예약된 종료" 표시줄을 스스로
+    // 숨기기 위한 콜백 — 없으면 onResume 전까지 이미 꺼진 PC에 대해 "탭하여
+    // 취소"가 계속 남는다. onPause에서 멈추고 onResume에서 다시 건다.
+    private var shutdownStatusExpiryRunnable: Runnable? = null
 
     // 예약된 종료 시각(epoch millis)만 담는 평범한 prefs — 민감 정보가 아니고,
     // 앱을 나갔다 돌아와도(집 밖에서 예약해두고 나중에 확인하는 경우가 있으므로)
     // "예약된 종료" 표시줄을 계속 보여주기 위해 액티비티 밖에 남겨둔다.
     private val shutdownPrefs by lazy { getSharedPreferences("shutdown_prefs", Context.MODE_PRIVATE) }
 
-    // 앱을 켜고 나서 전원 상태를 실제로 한 번이라도 확인했는지 — 최초
-    // 확인 때만 "확인 중..."을 잠깐 보여주고, 그 이후(자동 재확인/PC 켜기
-    // 폴링 등 반복 확인)에는 결과가 올 때까지 직전 상태를 그대로 유지한 채
-    // 조용히 백그라운드에서 확인하다가 값이 나오면 그때 갱신한다.
+    // 화면이 앞으로 나온(onResume) 뒤 전원 상태를 실제로 한 번이라도
+    // 확인했는지 — 그 첫 확인 때만 "확인 중..."을 보여주고(백그라운드에
+    // 있던 동안의 낡은 상태를 그대로 보여주지 않도록), 그 이후(자동 재확인/
+    // PC 켜기 폴링 등 반복 확인)에는 결과가 올 때까지 직전 상태를 그대로
+    // 유지한 채 조용히 확인하다가 값이 나오면 그때 갱신한다.
     private var hasCheckedPowerOnce = false
 
     // 자동 재확인(onResult 없는 호출)이 이전 요청의 타임아웃보다 자주 돌면
@@ -128,18 +136,24 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // 설정 화면에서 연결 정보/WireGuard/MAC을 바꾸고 돌아왔을 수 있으니
         // 매번 다시 읽는다.
+        hasCheckedPowerOnce = false
         updateStatus()
         // 앱이 백그라운드에 있는 동안 꺼뒀던 와이어가드를 WireWolApplication이
         // 지금 막 비동기로 되살리는 중일 수 있다 — 그 결과를 놓치지 않도록
         // 잠깐 뒤에 와이어가드 상태만 한 번 더 확인한다.
         handler.postDelayed({ refreshWireGuardStatus() }, WIREGUARD_STATUS_RECHECK_DELAY_MS)
         startAutoRefresh()
+        // 앱 프로세스가 죽었다 살아난 경우에도 남아있는 감시를 이어간다.
+        // onPause에서 멈추지 않는 이유: PC 종료는 보통 앱을 내려둔 사이에
+        // 일어나므로, 화면을 벗어났다고 감시를 멈추면 터널이 계속 남는다.
+        resumeWireGuardOffWatch()
     }
 
     override fun onPause() {
         super.onPause()
         stopPowerOnPolling()
         stopAutoRefresh()
+        stopShutdownStatusExpiry()
     }
 
     private fun startAutoRefresh() {
@@ -191,20 +205,26 @@ class MainActivity : AppCompatActivity() {
     // 핑을 시도한다(같은 LAN이든 WireGuard 터널이든 도달 가능하면 응답이 온다;
     // 도달 불가능하면 그냥 "확인 불가"로 뭉뚱그려 보여준다).
     private fun checkPowerStatus(pairing: PairingConfig.Info?, onResult: ((Boolean) -> Unit)? = null) {
+        // 연결 정보/네트워크가 없어 확인 자체를 못 한 경우는 다시 확인이
+        // 가능해졌을 때의 첫 시도에 "확인 중..."이 뜨도록 확인 이력을 되돌린다.
         if (pairing == null) {
+            hasCheckedPowerOnce = false
             setPowerStatus(R.string.status_power_pairing_missing, R.color.ww_hint)
             onResult?.invoke(false)
             return
         }
         if (!hasAnyNetwork()) {
+            hasCheckedPowerOnce = false
             setPowerStatus(R.string.status_power_no_network, R.color.ww_hint)
             onResult?.invoke(false)
             return
         }
-        if (onResult == null && powerCheckInFlight) return
+        // 이전 요청이 아직 진행 중이라 새로 보내지 않는 경우에도 첫 확인이면
+        // "확인 중..."은 띄워둔다(그 요청의 결과가 곧 이 표시를 덮어쓴다).
         if (!hasCheckedPowerOnce) {
             setPowerStatus(R.string.status_power_checking, R.color.ww_hint)
         }
+        if (onResult == null && powerCheckInFlight) return
         powerCheckInFlight = true
         val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
         Thread {
@@ -346,6 +366,9 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.mac_missing_for_wake, Toast.LENGTH_LONG).show()
             return
         }
+        // 다시 켜려는 참이니 이전 종료의 "확인 후 와이어가드 끄기" 감시가
+        // 켜기 흐름 중에 터널을 끊지 않도록 해제한다.
+        clearWireGuardOffWatch()
         sendWakeOnLan(mac)
         ensureConnectivity {
             sendWakeOnLan(mac)
@@ -553,7 +576,7 @@ class MainActivity : AppCompatActivity() {
         val targetMillis = System.currentTimeMillis() + delaySeconds * 1000L
         shutdownPrefs.edit().putLong(KEY_PENDING_SHUTDOWN, targetMillis).apply()
         updatePendingShutdownStatus()
-        scheduleWireGuardAutoOff(delaySeconds)
+        armWireGuardOffWatch(targetMillis)
         if (delaySeconds <= QUICK_SHUTDOWN_SECONDS) {
             showShutdownScheduledSnackbar()
         } else {
@@ -562,22 +585,73 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // PC가 실제로 꺼지는 시점에 맞춰(예약 지연이 끝난 뒤) 와이어가드도 함께
-    // 끈다 — 종료 취소 시 그사이엔 여전히 PC에 붙어있어야 하므로, 예약을
-    // 걸 때 곧바로 끄지 않고 지연 시간만큼 기다렸다가 끈다. 취소되면
-    // cancelPendingShutdown에서 이 예약도 함께 취소한다.
-    private fun scheduleWireGuardAutoOff(delaySeconds: Int) {
-        wireGuardAutoOffRunnable?.let { handler.removeCallbacks(it) }
+    // PC 끄기가 성공하면 와이어가드를 켜둔 경우에 한해 "종료 확인 후 와이어가드
+    // 끄기" 감시를 건다. 예약 시각이 지나기 전에는 PC가 켜져 있는 게 정상이고
+    // (그 사이 취소 요청이 터널로 나가야 한다), 시각이 됐다고 곧바로 끄면 PC
+    // 쪽에서 종료가 취소/실패한 경우에도 터널이 끊기므로 — 예약 시각부터 ping을
+    // 반복하다가 무응답(꺼짐)이 확인될 때만 끈다. 감시 시작 시각은 prefs에 남겨
+    // 앱 프로세스가 죽었다 살아나도 onResume에서 이어서 감시한다.
+    private fun armWireGuardOffWatch(targetMillis: Long) {
+        clearWireGuardOffWatch()
         if (!wireGuard.hasConfig() || !wireGuard.isUp()) return
-        val runnable = Runnable {
-            wireGuardAutoOffRunnable = null
-            Thread {
-                wireGuard.bringDown()
-                handler.post { refreshWireGuardStatus() }
-            }.start()
+        shutdownPrefs.edit().putLong(KEY_WIREGUARD_OFF_WATCH_FROM, targetMillis).apply()
+        resumeWireGuardOffWatch()
+    }
+
+    private fun resumeWireGuardOffWatch() {
+        wireGuardOffWatchRunnable?.let { handler.removeCallbacks(it) }
+        wireGuardOffWatchRunnable = null
+        val watchFrom = shutdownPrefs.getLong(KEY_WIREGUARD_OFF_WATCH_FROM, 0L)
+        if (watchFrom == 0L) return
+        val runnable = object : Runnable {
+            override fun run() {
+                val pairing = pairingConfig.load()
+                // 사용자가 그새 와이어가드를 직접 껐거나, 종료가 끝내 확인되지
+                // 않으면(PC 쪽에서 취소 등) 감시를 그만둔다.
+                if (pairing == null || !wireGuard.isUp() ||
+                    System.currentTimeMillis() - watchFrom > WIREGUARD_OFF_WATCH_TIMEOUT_MS
+                ) {
+                    clearWireGuardOffWatch()
+                    return
+                }
+                // 폰 자체가 네트워크를 잃은 건 PC 꺼짐의 근거가 아니다.
+                if (!hasAnyNetwork() || wireGuardOffWatchInFlight) {
+                    handler.postDelayed(this, WIREGUARD_OFF_WATCH_INTERVAL_MS)
+                    return
+                }
+                wireGuardOffWatchInFlight = true
+                val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
+                Thread {
+                    val result = companionClient.ping(config)
+                    handler.post {
+                        wireGuardOffWatchInFlight = false
+                        if (wireGuardOffWatchRunnable !== this) return@post
+                        when (result) {
+                            is CompanionClient.Result.Success -> {
+                                setPowerStatus(R.string.status_power_on, R.color.ww_accent_green)
+                                handler.postDelayed(this, WIREGUARD_OFF_WATCH_INTERVAL_MS)
+                            }
+                            is CompanionClient.Result.Failure -> {
+                                setPowerStatus(R.string.status_power_off, R.color.ww_accent_red)
+                                clearWireGuardOffWatch()
+                                Thread {
+                                    wireGuard.bringDown()
+                                    handler.post { refreshWireGuardStatus() }
+                                }.start()
+                            }
+                        }
+                    }
+                }.start()
+            }
         }
-        wireGuardAutoOffRunnable = runnable
-        handler.postDelayed(runnable, delaySeconds * 1000L)
+        wireGuardOffWatchRunnable = runnable
+        handler.postDelayed(runnable, (watchFrom - System.currentTimeMillis()).coerceAtLeast(0L))
+    }
+
+    private fun clearWireGuardOffWatch() {
+        wireGuardOffWatchRunnable?.let { handler.removeCallbacks(it) }
+        wireGuardOffWatchRunnable = null
+        shutdownPrefs.edit().remove(KEY_WIREGUARD_OFF_WATCH_FROM).apply()
     }
 
     private fun showShutdownScheduledSnackbar() {
@@ -590,8 +664,10 @@ class MainActivity : AppCompatActivity() {
     // 길면(수 분~수 시간) 10초짜리 Snackbar가 사라진 뒤에도 취소할 방법이
     // 있어야 하므로, 화면을 다시 열 때마다(onResume) 계속 확인한다.
     private fun updatePendingShutdownStatus() {
+        stopShutdownStatusExpiry()
         val target = shutdownPrefs.getLong(KEY_PENDING_SHUTDOWN, 0L)
-        if (target <= System.currentTimeMillis()) {
+        val remaining = target - System.currentTimeMillis()
+        if (remaining <= 0) {
             statusShutdownText.visibility = View.GONE
             if (target != 0L) shutdownPrefs.edit().remove(KEY_PENDING_SHUTDOWN).apply()
             return
@@ -600,6 +676,17 @@ class MainActivity : AppCompatActivity() {
         statusShutdownText.text = getString(R.string.status_shutdown_scheduled, timeLabel)
         statusShutdownText.visibility = View.VISIBLE
         statusShutdownText.setOnClickListener { cancelPendingShutdown() }
+        val runnable = Runnable {
+            shutdownStatusExpiryRunnable = null
+            updatePendingShutdownStatus()
+        }
+        shutdownStatusExpiryRunnable = runnable
+        handler.postDelayed(runnable, remaining)
+    }
+
+    private fun stopShutdownStatusExpiry() {
+        shutdownStatusExpiryRunnable?.let { handler.removeCallbacks(it) }
+        shutdownStatusExpiryRunnable = null
     }
 
     private fun cancelPendingShutdown() {
@@ -615,8 +702,7 @@ class MainActivity : AppCompatActivity() {
                 when (result) {
                     is CompanionClient.Result.Success -> {
                         shutdownPrefs.edit().remove(KEY_PENDING_SHUTDOWN).apply()
-                        wireGuardAutoOffRunnable?.let { handler.removeCallbacks(it) }
-                        wireGuardAutoOffRunnable = null
+                        clearWireGuardOffWatch()
                         Toast.makeText(this, R.string.shutdown_cancelled, Toast.LENGTH_SHORT).show()
                         updatePendingShutdownStatus()
                     }
@@ -627,7 +713,10 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    // 와이어가드 버튼을 직접 누르면 사용자의 선택이 우선이다 — 남아있던 "종료
+    // 확인 후 끄기" 감시가 나중에 터널을 끊지 않도록 해제한다.
     private fun onWireGuardOnClicked() {
+        clearWireGuardOffWatch()
         if (!wireGuard.hasConfig()) {
             Toast.makeText(this, R.string.wireguard_missing, Toast.LENGTH_SHORT).show()
             return
@@ -652,6 +741,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onWireGuardOffClicked() {
+        clearWireGuardOffWatch()
         if (!wireGuard.hasConfig() || !wireGuard.isUp()) {
             updateStatus()
             return
@@ -665,6 +755,9 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val QUICK_SHUTDOWN_SECONDS = 10
         private const val KEY_PENDING_SHUTDOWN = "pending_shutdown_at"
+        private const val KEY_WIREGUARD_OFF_WATCH_FROM = "wireguard_off_watch_from"
+        private const val WIREGUARD_OFF_WATCH_INTERVAL_MS = 5_000L
+        private const val WIREGUARD_OFF_WATCH_TIMEOUT_MS = 10 * 60_000L
         private const val WIREGUARD_STATUS_RECHECK_DELAY_MS = 1200L
         private const val POWER_ON_POLL_INTERVAL_MS = 5_000L
         private const val FAST_POWER_ON_POLL_INTERVAL_MS = 1_000L

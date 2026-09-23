@@ -4,11 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 개요
 
-집에 있는 PC를 폰이나 다른 컴퓨터에서 리모컨처럼 켜고(Wake-on-LAN), 끄고(원격 종료), WireGuard VPN을 켰다 끌 수 있게 해주는 세 부분짜리 프로젝트다.
+집에 있는 PC를 폰에서 리모컨처럼 켜고(Wake-on-LAN), 끄고(원격 종료), WireGuard VPN을 켰다 끌 수 있게 해주는 두 부분짜리 프로젝트다.
 
 - **`android/`**: 실제로 사용자가 만지는 앱. 버튼 네 개(PC 켜기 / PC 끄기 / 와이어가드 켜기 / 와이어가드 끄기)가 전부인 단일 화면 리모컨 + 자주 안 쓰는 것들을 모은 별도 설정 화면.
 - **`windows/`**: PC 켜기(WOL)는 매직 패킷을 폰이 직접 브로드캐스트하므로 PC 쪽에 아무 프로그램이 없어도 되지만, **PC 끄기는 PC가 뭔가 받아서 실행해줘야 하므로** 최소한의 상주 프로그램이 필요하다 — 그 역할을 하는 트레이 상주 프로그램.
-- **`client/`**: 노트북 등 다른 컴퓨터에서 쓰는 리모컨(Windows 전용). android 앱과 같은 기능(PC 켜기/끄기, 와이어가드 켜기/끄기)을 제공하지만, "명령을 받는" `windows/`와 달리 이쪽은 android 앱처럼 "명령을 보내는" 쪽이다 — `windows/`와는 반대 역할이라 코드도 완전히 별개다.
 
 이 프로젝트는 `mobile-hub-viewer_v`(같은 개발자의 다른 프로젝트)의 WireGuard 임베딩 코드와 WOL 코드, 그리고 `hub.pyw`의 3모드 실행 구조/자동 시작 등록 방식을 그대로 참고해 만들었지만, **완전히 독립된 프로젝트**다 — `mobile-hub-viewer_v`의 hub 서버가 떠 있을 필요가 전혀 없다.
 
@@ -21,12 +20,6 @@ python windows/wirewol.pyw
 의존성: `pip install -r windows/requirements.txt` (Flask, qrcode, Pillow, pystray, pywin32).
 
 **Android 앱**: `android/`를 Android Studio로 열거나 `cd android && ./gradlew assembleDebug`(Windows는 `gradlew.bat`)로 빌드한다. compileSdk/targetSdk 35, minSdk 26, Kotlin + AGP 8.7.3 + Gradle 8.9 — `mobile-hub-viewer_v/android`와 동일한 툴체인.
-
-**컴퓨터용 클라이언트** (다른 컴퓨터에서 실행):
-```
-python client/wirewol_client.pyw
-```
-의존성: `pip install -r client/requirements.txt` (PyQt5, requests, pywin32, opencv-python, pyzbar). WireGuard 켜기/끄기를 쓰려면 [공식 WireGuard for Windows 클라이언트](https://www.wireguard.com/install/)가 별도로 설치되어 있어야 한다.
 
 ## 아키텍처
 
@@ -57,20 +50,6 @@ WebView가 전혀 없는 순수 네이티브 단일 화면(`MainActivity`) — �
 - **`CompanionClient.kt`**: 이 프로젝트에서 새로 추가한 것 — Windows 컴패니언의 `/api/ping`·`/api/shutdown`·`/api/shutdown/cancel`을 호출하는 얇은 OkHttp 클라이언트. RouterWol과 달리 TLS 인증서 처리가 없다(같은 LAN 또는 WireGuard 터널 안의 평범한 http로만 통신한다고 가정).
 - **`MainActivity.kt`**: 버튼 4개(PC 켜기/PC 끄기/와이어가드 켜기/와이어가드 끄기) + 상태 카드(연결 대상, MAC, WireGuard 상태) + 설정 화면으로 가는 버튼 하나가 전부. **와이어가드는 토글 버튼 하나가 아니라 켜기/끄기 버튼을 따로 둔다** — 리모컨의 다른 버튼들처럼 사용자가 누른 상태를 그대로 유지하고(`onStart`/`onStop`에 걸어 자동으로 올리고 내리지 않음), mobile-hub-viewer_v의 android 앱과 달리 "화면을 보는 동안만 연결"이라는 전제 자체가 없다(감쌀 웹 콘텐츠가 없기 때문). PC 끄기는 확인 다이얼로그 → 컴패니언 API 호출 → 성공 시 10초짜리 Snackbar("취소" 액션 포함)로 진행한다.
 - **`SettingsActivity.kt`**: 자주 안 쓰는 것들(연결 정보 스캔, MAC 수동 입력, WireGuard 설정 스캔, 원격 WOL 설정, 전체 초기화)을 모은 별도 화면 — `MainActivity`의 "설정" 버튼으로 진입한다. 각 항목 아래에 현재 설정 여부를 보여주는 상태 문구가 있다(`refreshStatuses()`) — 필수(연결 정보)와 선택(WireGuard/원격 WOL)을 구분해서 표시한다.
-
-### 컴퓨터용 클라이언트 (`client/`)
-
-Windows 전용 PyQt5 데스크톱 앱. `android/`가 하는 일을 그대로 옮긴 것이라 `MainActivity.kt`/`SettingsActivity.kt`의 버튼 구성·플로우와 최대한 대응시켰다 — 한쪽 동작을 바꾸면 다른 쪽도 확인할 것.
-
-- **`app/config.py`**: 안드로이드의 EncryptedSharedPreferences에 대응 — Windows DPAPI(`win32crypt.CryptProtectData`/`CryptUnprotectData`, 같은 윈도우 계정으로 로그인해야 복호화됨)로 페어링 정보/원격 WOL 자격 증명/WireGuard `.conf`를 한 파일(`wirewol_client_secrets.dat`)에 암호화해 저장한다. 안드로이드처럼 굳이 파일을 나누지 않았다 — 어차피 같은 로컬 사용자 하나만 접근 가능해 격리 이점이 없다. 저장 위치는 프로그램 폴더가 아니라 `%LOCALAPPDATA%\WireWOL Client\`(사용자별 숨김 폴더) — exe를 옮기거나 재설치해도 설정이 남고, 탐색기에서 파일 존재 자체가 바로 눈에 띄지 않는다. 구버전(프로그램 폴더 저장)에서 올라온 파일은 처음 실행 시 자동으로 새 위치로 옮겨진다.
-- **`app/wol.py`**: `MainActivity.kt`의 `sendWakeOnLan`과 동일 — 매직 패킷을 `255.255.255.255:9`로 브로드캐스트한다.
-- **`app/router_wol.py`**: `RouterWol.kt`와 동일한 로그인→`wol/signal` 흐름, TOFU 인증서 고정(지문을 `ClientConfig`에 저장). OkHttp 대신 `http.client.HTTPSConnection`을 직접 써서 피어 인증서 원문을 확보한다 — `requests`로는 검증을 우회하면서 인증서 자체를 손에 넣기 까다롭다.
-- **`app/wireguard_client.py`**: 안드로이드는 GoBackend를 앱에 내장하지만 Windows엔 그런 손쉬운 임베딩 라이브러리가 없다 — 대신 사용자가 이미 설치한 **공식 WireGuard for Windows 클라이언트**(`wireguard.exe`)의 터널 서비스 관리 기능을 빌린다. 켤 때마다 `.conf`를 임시 파일로 써서 `/installtunnelservice`(설치+기동을 동시에 함), 끌 때 `/uninstalltunnelservice`(중지+제거를 동시에 함)를 고정된 터널 이름(`wirewolclient`)으로 호출한다 — 설정이 바뀌었을 수 있으니 매번 새로 실행하는 편이 오래된 서비스가 남아 꼬이는 것보다 낫다. 터널 서비스 설치/제거는 관리자 권한이 필요한데, 호출할 때마다 UAC를 띄우는 대신 **클라이언트 앱 전체를 관리자 권한으로 실행**하는 방식을 택했다 — 빌드된 exe는 PyInstaller `--uac-admin` 매니페스트로 실행 즉시 상승되고, `wirewol_client.pyw`(`python`으로 직접 띄우는 개발 환경)는 `main()`에서 `IsUserAnAdmin()`으로 확인 후 아니면 `ShellExecuteW(..., 'runas', ...)`로 자기 자신을 한 번만 재실행한다. 이후 `wireguard_client.py`는 이미 상승된 프로세스이므로 별도 승격 없이 `wireguard.exe`를 그냥 호출한다.
-- **`app/companion_client.py`**: `CompanionClient.kt`와 동일한 계약(`X-WireWOL-Token` 헤더, `/api/ping`·`/api/shutdown`·`/api/shutdown/cancel`)으로 `windows/` 컴패니언을 호출한다.
-- **`app/qr_scan.py`**: 웹캠으로 QR을 스캔하는 모달(OpenCV + pyzbar) — 안드로이드처럼 카메라로 직접 페어링할 수 있는 경로. `app/settings_dialog.py`에서 붙여넣기와 함께 두 가지 입력 방식을 모두 제공한다. `generate_qr_pixmap()`은 반대 방향(저장된 설정을 QR로 내보내기)을 위한 것 — `qrcode` 패키지로 만든 PNG를 `QPixmap`으로 변환한다.
-- **`app/main_window.py`**: 안드로이드 `MainActivity`에 대응하는 메인 창. HTTP/공유기/WireGuard 호출은 전부 `run_async`(백그라운드 스레드 + Qt 시그널로 결과를 메인 스레드에 전달)로 실행해 창이 멈추지 않게 한다. 창이 떠 있는 동안 5초 간격으로 PC 전원 상태를 자동 재확인하는 타이머(`_auto_refresh_timer`)와, 예약된 종료 시각을 `ClientConfig`에 저장해 창을 닫았다 다시 열어도 상태 카드에 남아있게 하는 로직(`_update_pending_shutdown_status`)이 `MainActivity.kt`의 `startAutoRefresh`/`shutdownPrefs`와 각각 대응한다.
-
-안드로이드 `SettingsActivity.kt`의 `showPairingQrDialog`(저장된 연결 정보를 PC 트레이 `_pairing_payload`와 **완전히 같은 JSON 스키마**로 다시 QR로 보여주는 기능)는 `client/app/settings_dialog.py`의 `_on_show_pairing_qr`로도 옮겨져 있다 — 스키마를 바꾸면 트레이/안드로이드/데스크톱 클라이언트의 스캔·표시·파싱을 전부 함께 고칠 것.
 
 ## 코드 관례
 - Windows 쪽 페어링 QR JSON 스키마와 안드로이드 쪽 파싱은 서로의 계약이다 — 한쪽만 고치면 깨진다(위 아키텍처 절 참고).

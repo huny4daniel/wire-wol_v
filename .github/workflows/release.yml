@@ -53,51 +53,6 @@ jobs:
           name: windows-exe
           path: windows/dist/WireWOL_${{ github.ref_name }}.exe
 
-  build-client:
-    runs-on: windows-latest
-
-    steps:
-      - name: 코드 체크아웃
-        uses: actions/checkout@v4
-
-      - name: Python 설치
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: 의존성 설치
-        env:
-          # build-windows와 같은 이유로 부트로더를 소스에서 직접 컴파일한다.
-          PYINSTALLER_COMPILE_BOOTLOADER: '1'
-        run: |
-          pip install --no-binary=pyinstaller pyinstaller
-          pip install PyQt5 requests pywin32 opencv-python pyzbar qrcode Pillow
-
-      - name: 버전 정보 파일 생성
-        run: |
-          python .github/scripts/make_version_file.py "${{ github.ref_name }}" "WireWOLClient_${{ github.ref_name }}.exe" "WireWOL remote client" client/version_info.txt
-
-      - name: exe 빌드
-        working-directory: client
-        run: |
-          $pyzbarDir = python -c "import pyzbar, os; print(os.path.dirname(pyzbar.__file__))"
-          python -m PyInstaller `
-            --onefile `
-            --windowed `
-            --uac-admin `
-            --version-file "version_info.txt" `
-            --icon "assets/client_icon.ico" `
-            --add-binary "$pyzbarDir\libiconv.dll;." `
-            --add-binary "$pyzbarDir\libzbar-64.dll;." `
-            --name "WireWOLClient_${{ github.ref_name }}" `
-            "wirewol_client.pyw"
-
-      - name: exe 업로드
-        uses: actions/upload-artifact@v4
-        with:
-          name: client-exe
-          path: client/dist/WireWOLClient_${{ github.ref_name }}.exe
-
   build-android:
     runs-on: ubuntu-latest
 
@@ -148,7 +103,7 @@ jobs:
           path: android/app/build/outputs/apk/release/app-release.apk
 
   release:
-    needs: [build-windows, build-client, build-android]
+    needs: [build-windows, build-android]
     runs-on: ubuntu-latest
 
     steps:
@@ -156,12 +111,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: windows-exe
-          path: dist
-
-      - name: 클라이언트 exe 다운로드
-        uses: actions/download-artifact@v4
-        with:
-          name: client-exe
           path: dist
 
       - name: apk 다운로드
@@ -197,5 +146,4 @@ jobs:
           name: ${{ github.ref_name }}
           files: |
             dist/WireWOL_${{ github.ref_name }}.exe
-            dist/WireWOLClient_${{ github.ref_name }}.exe
             dist/WireWOLAndroid_${{ github.ref_name }}.apk

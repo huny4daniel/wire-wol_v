@@ -50,10 +50,6 @@ class WireGuardController(context: Context) {
 
     fun hasConfig(): Boolean = !prefs.getString(KEY_CONF, null).isNullOrBlank()
 
-    // 저장된 원문을 그대로 돌려준다 — SettingsActivity가 "전체 설정 QR로
-    // 보여주기"에 담아 컴퓨터 클라이언트로 넘길 때 쓴다.
-    fun loadConfigText(): String? = prefs.getString(KEY_CONF, null)
-
     // QR에서 읽은 원문(.conf 텍스트, 개인키 포함)을 그대로 암호화 저장한다 —
     // 파싱은 실제로 터널을 올릴 때마다 새로 한다(설정이 바뀌어도 항상 최신
     // 내용으로 붙게).
