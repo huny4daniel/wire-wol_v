@@ -38,14 +38,15 @@ class WireGuardController(context: Context) {
         )
     }
 
-    private val backend by lazy { GoBackend(appContext) }
-
-    private val tunnel = object : Tunnel {
-        override fun getName() = TUNNEL_NAME
-        override fun onStateChange(newState: Tunnel.State) {
-            Log.d(TAG, "tunnel state changed: $newState")
-        }
-    }
+    // GoBackend와 Tunnel은 반드시 프로세스 전체에서 하나만 써야 한다 —
+    // GoBackend.getState()는 "자기 인스턴스가 올린 터널 객체와 같은가"만 보고,
+    // 올린 터널 핸들도 인스턴스 필드에 들고 있다. MainActivity/SettingsActivity/
+    // WireWolApplication이 각자 인스턴스를 만들면, 실제로는 터널이 떠 있는데도
+    // 다른 인스턴스에서는 isUp()이 false로 보이고, 그 상태로 bringUp()을 부르면
+    // 같은 개인키로 두 번째 wg 장치가 떠서 서버 쪽 엔드포인트가 둘 사이를
+    // 오가며 연결이 됐다 안 됐다 한다.
+    private val backend get() = sharedBackend(appContext)
+    private val tunnel get() = sharedTunnel
 
     fun hasConfig(): Boolean = !prefs.getString(KEY_CONF, null).isNullOrBlank()
 
@@ -74,6 +75,8 @@ class WireGuardController(context: Context) {
         }
     }
 
+    // 메인 스레드에서도 부르므로 lock을 잡지 않는다 — getState는 필드 비교뿐이라
+    // 가볍고, bringUp이 서비스 기동을 기다리는 동안(최대 수 초) 화면이 멈추면 안 된다.
     fun isUp(): Boolean = try {
         backend.getState(tunnel) == Tunnel.State.UP
     } catch (e: Exception) {
@@ -83,9 +86,12 @@ class WireGuardController(context: Context) {
     // 반드시 VpnService.prepare()로 사용자 승인을 먼저 받은 뒤(필요한 경우)에만
     // 호출할 것 — 네트워크/네이티브 호출이 섞여 있으니 백그라운드 스레드에서
     // 호출한다.
-    fun bringUp(): Boolean {
+    fun bringUp(): Boolean = synchronized(lock) {
         val config = loadParsedConfig() ?: return false
-        return try {
+        // 이미 떠 있으면 다시 올리지 않는다(WireWolApplication의 복귀 시 재연결과
+        // 버튼/자동 연결이 동시에 들어오는 경우).
+        if (isUp()) return true
+        try {
             backend.setState(tunnel, Tunnel.State.UP, config)
             true
         } catch (e: Exception) {
@@ -94,7 +100,7 @@ class WireGuardController(context: Context) {
         }
     }
 
-    fun bringDown() {
+    fun bringDown() = synchronized(lock) {
         try {
             backend.setState(tunnel, Tunnel.State.DOWN, null)
         } catch (e: Exception) {
@@ -103,6 +109,24 @@ class WireGuardController(context: Context) {
     }
 
     companion object {
+        // bringUp/bringDown이 동시에 들어오지 않게 막는 락(백엔드 생성도 겸한다).
+        private val lock = Any()
+
+        @Volatile
+        private var backendInstance: GoBackend? = null
+
+        private fun sharedBackend(appContext: Context): GoBackend =
+            backendInstance ?: synchronized(lock) {
+                backendInstance ?: GoBackend(appContext).also { backendInstance = it }
+            }
+
+        private val sharedTunnel = object : Tunnel {
+            override fun getName() = TUNNEL_NAME
+            override fun onStateChange(newState: Tunnel.State) {
+                Log.d(TAG, "tunnel state changed: $newState")
+            }
+        }
+
         private const val TUNNEL_NAME = "wirewol"
         private const val KEY_CONF = "config_text"
         private const val TAG = "WireGuardController"

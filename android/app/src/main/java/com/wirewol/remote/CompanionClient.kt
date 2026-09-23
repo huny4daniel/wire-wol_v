@@ -25,9 +25,11 @@ class CompanionClient {
         data class Failure(val message: String) : Result()
     }
 
+    // 와이어가드를 막 켠 직후의 첫 요청은 핸드셰이크(유실 시 5초 뒤 재시도)가
+    // 끝나야 나가므로, 4초 같은 짧은 타임아웃은 터널이 멀쩡해도 실패로 끝난다.
     private val client = OkHttpClient.Builder()
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(4, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
     private fun baseUrl(config: Config) = "http://${config.host}:${config.port}"

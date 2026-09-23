@@ -197,7 +197,11 @@ class MainWindow(QWidget):
                 if on_result:
                     on_result(True)
             else:
-                self.status_power_label.setText('전원: 꺼짐/확인 불가')
+                # 집 밖에서 와이어가드 없이 응답이 없는 건 PC가 꺼졌다는 뜻이 아니다.
+                if self.config.load_wireguard_conf() and not wireguard_client.is_up():
+                    self.status_power_label.setText('전원: 응답 없음(집 밖이라면 와이어가드를 켜야 확인됩니다)')
+                else:
+                    self.status_power_label.setText('전원: 꺼짐/확인 불가')
                 if on_result:
                     on_result(False)
 
@@ -251,9 +255,18 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, '오류', 'MAC 주소가 없어 PC를 깨울 수 없습니다. 설정에서 연결 정보를 다시 확인하세요')
             return
 
+        # _ensure_connectivity보다 먼저 한 번 보낸다 — PC가 꺼져 있으면 집
+        # 안에서도 포트 탐지가 실패해 와이어가드가 켜지고, 그 뒤엔 브로드캐스트가
+        # 터널로 빠져 집 LAN에 닿지 않는다.
+        try:
+            wol.send_magic_packet(mac, pairing.get('host'))
+        except ValueError as e:
+            QMessageBox.warning(self, '오류', str(e))
+            return
+
         def proceed():
             try:
-                wol.send_magic_packet(mac)
+                wol.send_magic_packet(mac, pairing.get('host'))
             except ValueError as e:
                 QMessageBox.warning(self, '오류', str(e))
                 return
@@ -372,7 +385,7 @@ class MainWindow(QWidget):
         간격으로 ping을 재시도하다가, 응답이 오는 즉시 종료 요청을 다시
         보낸다."""
         try:
-            wol.send_magic_packet(mac)
+            wol.send_magic_packet(mac, pairing.get('host'))
         except ValueError:
             pass
         self._trigger_remote_wake_if_configured(mac)

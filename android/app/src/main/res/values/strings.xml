@@ -15,6 +15,7 @@
     <string name="status_power_checking">PC 상태: 확인 중…</string>
     <string name="status_power_on">PC 상태: 켜짐</string>
     <string name="status_power_off">PC 상태: 꺼짐 (또는 응답 없음)</string>
+    <string name="status_power_unreachable_wireguard_off">PC 상태: 응답 없음 (집 밖이라면 와이어가드를 켜야 확인됩니다)</string>
     <string name="status_power_no_network">PC 상태: 네트워크 연결 없음</string>
     <string name="status_power_pairing_missing">PC 상태: 연결 정보가 없습니다</string>
 

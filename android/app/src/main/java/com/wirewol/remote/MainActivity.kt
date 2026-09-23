@@ -79,6 +79,10 @@ class MainActivity : AppCompatActivity() {
     // 조용히 백그라운드에서 확인하다가 값이 나오면 그때 갱신한다.
     private var hasCheckedPowerOnce = false
 
+    // 자동 재확인(onResult 없는 호출)이 이전 요청의 타임아웃보다 자주 돌면
+    // 요청이 계속 쌓이므로, 아직 응답을 기다리는 중이면 새로 보내지 않는다.
+    private var powerCheckInFlight = false
+
     private val vpnPermissionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         val after = pendingAfterVpnPermission
         pendingAfterVpnPermission = null
@@ -197,13 +201,16 @@ class MainActivity : AppCompatActivity() {
             onResult?.invoke(false)
             return
         }
+        if (onResult == null && powerCheckInFlight) return
         if (!hasCheckedPowerOnce) {
             setPowerStatus(R.string.status_power_checking, R.color.ww_hint)
         }
+        powerCheckInFlight = true
         val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
         Thread {
             val result = companionClient.ping(config)
             handler.post {
+                powerCheckInFlight = false
                 hasCheckedPowerOnce = true
                 when (result) {
                     is CompanionClient.Result.Success -> {
@@ -211,7 +218,13 @@ class MainActivity : AppCompatActivity() {
                         onResult?.invoke(true)
                     }
                     is CompanionClient.Result.Failure -> {
-                        setPowerStatus(R.string.status_power_off, R.color.ww_accent_red)
+                        // 집 밖에서 와이어가드 없이 응답이 없는 건 PC가 꺼졌다는 뜻이
+                        // 아니다 — "꺼짐"으로 단정하지 않고 확인 불가로 구분해 보여준다.
+                        if (wireGuard.hasConfig() && !wireGuard.isUp()) {
+                            setPowerStatus(R.string.status_power_unreachable_wireguard_off, R.color.ww_hint)
+                        } else {
+                            setPowerStatus(R.string.status_power_off, R.color.ww_accent_red)
+                        }
                         onResult?.invoke(false)
                     }
                 }
@@ -321,14 +334,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     // PC가 꺼져있어도 눌러서 깨울 수 있도록 매직 패킷을 보낸다(Wake-on-LAN).
-    // 폰이 PC와 같은 LAN(와이파이)에 있거나, WireGuard로 붙어있어 브로드캐스트가
+    // 폰이 PC와 같은 LAN(와이파이)에 있거나, WireGuard로 붙어있어 패킷이
     // 도달할 수 있어야 한다.
+    //
+    // ensureConnectivity보다 먼저 한 번 보내는 이유: PC가 꺼져 있으면 집 안에
+    // 있어도 컴패니언 포트 탐지가 실패해 와이어가드가 자동으로 켜지는데, 그
+    // 뒤에는 브로드캐스트가 와이파이가 아니라 터널로 빠져 집 LAN에 닿지 않는다.
     private fun onPowerOnClicked() {
         val mac = pairingConfig.loadMac()
         if (mac.isBlank()) {
             Toast.makeText(this, R.string.mac_missing_for_wake, Toast.LENGTH_LONG).show()
             return
         }
+        sendWakeOnLan(mac)
         ensureConnectivity {
             sendWakeOnLan(mac)
             Toast.makeText(this, R.string.wake_sent, Toast.LENGTH_SHORT).show()
@@ -337,19 +355,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // 255.255.255.255(제한 브로드캐스트)는 라우터를 넘지 못해 와이어가드
+    // 터널로는 절대 집 LAN에 닿지 않는다 — 그래서 PC 주소 기준 /24 대역의
+    // 지정 브로드캐스트(x.x.x.255)와 PC 주소 자체(유니캐스트, 공유기에 ARP가
+    // 남아있는 동안 유효)로도 함께 보낸다. 어느 쪽이 통할지는 공유기 설정에
+    // 달려 있어 전부 보내는 편이 낫다.
     private fun sendWakeOnLan(mac: String) {
+        val host = pairingConfig.load()?.host
         Thread {
-            try {
+            val packet = try {
                 val macBytes = mac.split(Regex("[:\\-]")).map { it.toInt(16).toByte() }.toByteArray()
                 require(macBytes.size == 6)
-                val packet = ByteArray(6 + 16 * 6)
-                for (i in 0 until 6) packet[i] = 0xFF.toByte()
-                for (i in 6 until packet.size step 6) macBytes.copyInto(packet, i)
-                val socket = java.net.DatagramSocket()
-                socket.broadcast = true
-                val address = java.net.InetAddress.getByName("255.255.255.255")
-                socket.send(java.net.DatagramPacket(packet, packet.size, address, 9))
-                socket.close()
+                ByteArray(6 + 16 * 6).also { packet ->
+                    for (i in 0 until 6) packet[i] = 0xFF.toByte()
+                    for (i in 6 until packet.size step 6) macBytes.copyInto(packet, i)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("WireWOL", "MAC 주소 형식 오류", e)
+                return@Thread
+            }
+            val targets = mutableListOf("255.255.255.255")
+            val octets = host?.split(".")
+            if (host != null && octets != null && octets.size == 4 && octets.all { it.toIntOrNull() in 0..255 }) {
+                targets += "${octets[0]}.${octets[1]}.${octets[2]}.255"
+                targets += host
+            }
+            try {
+                java.net.DatagramSocket().use { socket ->
+                    socket.broadcast = true
+                    for (target in targets) {
+                        try {
+                            val address = java.net.InetAddress.getByName(target)
+                            socket.send(java.net.DatagramPacket(packet, packet.size, address, 9))
+                        } catch (e: Exception) {
+                            android.util.Log.w("WireWOL", "매직 패킷 전송 실패: $target", e)
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 android.util.Log.e("WireWOL", "매직 패킷 전송 실패", e)
             }
