@@ -36,20 +36,27 @@ PyInstaller로 빌드된(`frozen`) exe에서는 등록이 실제 exe 경로를 �
 
 `app/server.py`는 Flask 앱 하나로 최소한의 API만 제공한다. 브라우저 세션이 아니라 앱이 직접 호출하는 단순 명령이라 쿠키 기반 페어링 대신 **고정 토큰**(`X-WireWOL-Token` 헤더)으로 인증한다 — `before_request`에서 모든 요청에 대해 검사한다.
 - `GET /api/ping`: 헬스체크 + `get_primary_mac()`(mobile-hub-viewer_v의 `app/routes/system.py`에서 그대로 옮긴, `getmac` CSV 파싱으로 Wi-Fi 어댑터 MAC을 우선 찾는 로직)로 알아낸 MAC을 같이 반환한다.
-- `POST /api/shutdown`: `shutdown /s /f /t 10`(10초 지연 종료, `/f`로 실행 중인 앱 강제 종료 — 폰에서의 오조작이 곧바로 작업을 날리지 않도록).
+- `POST /api/shutdown`: `shutdown /s /f /t <delay>`(`/f`로 실행 중인 앱 강제 종료). JSON 바디의 `delay_seconds`가 없으면 기본 10초 지연(즉시 끄기 — 폰에서의 오조작이 곧바로 작업을 날리지 않도록), 있으면 그만큼 뒤로 예약한다(예약 끄기, 0~24시간 범위 검증). Windows는 예약이 걸린 채로 `shutdown /s /t`를 다시 부르면 갱신 없이 실패하므로, 매번 `shutdown /a`로 기존 예약을 먼저 지운 뒤 건다 — 즉시 끄기/예약 끄기 중 무엇을 다시 눌러도 최신 요청으로 덮어써진다.
 - `POST /api/shutdown/cancel`: `shutdown /a`로 취소.
 
-트레이 "연결 정보 보기"(`_pairing_payload`)는 `{"host","port","token","mac"}` 형태의 **JSON 텍스트**를 QR로 보여준다 — mobile-hub-viewer_v의 페어링 QR(URL 형식)과 다르게, 여기는 감쌀 웹앱이 없어 순수 데이터만 필요하기 때문이다. **이 JSON 스키마가 안드로이드 쪽 `PairingConfig`/`MainActivity.handlePairingScan`과의 계약이다 — 필드를 추가/변경하면 양쪽을 함께 고칠 것.**
+트레이 "연결 정보 보기"(`_pairing_payload`)는 `{"host","port","token","mac"}` 형태의 **JSON 텍스트**를 QR로 보여준다 — mobile-hub-viewer_v의 페어링 QR(URL 형식)과 다르게, 여기는 감쌀 웹앱이 없어 순수 데이터만 필요하기 때문이다. **이 JSON 스키마가 안드로이드 쪽 `PairingConfig`/`SettingsActivity.handlePairingScan`과의 계약이다 — 필드를 추가/변경하면 양쪽을 함께 고칠 것.**
 
 ### Android 앱 (`android/`)
 WebView가 전혀 없는 순수 네이티브 단일 화면(`MainActivity`) — 감쌀 PWA가 없으니 mobile-hub-viewer_v의 android 앱과 달리 버튼 UI 자체가 화면의 전부다.
 
-- **`WireGuardController.kt`**: mobile-hub-viewer_v의 `HubWireGuard.kt`를 그대로 옮긴 것 — WireGuard 공식 임베딩 라이브러리(`com.wireguard.android:tunnel`, GoBackend)로 별도 앱 없이 VPN을 붙였다 뗀다. 설정(.conf 텍스트, 공유기가 만들어준 QR을 스캔해서 얻음)은 암호화된 SharedPreferences에 저장.
+- **`WireGuardController.kt`**: mobile-hub-viewer_v의 `HubWireGuard.kt`를 그대로 옮긴 것 — WireGuard 공식 임베딩 라이브러리(`com.wireguard.android:tunnel`, GoBackend)로 별도 앱 없이 VPN을 붙였다 뗀다. 설정(.conf 텍스트, 공유기가 만들어준 QR을 스캔해서 얻음)은 암호화된 SharedPreferences에 저장. **GoBackend와 Tunnel 객체는 companion object에 둔 프로세스 전역 싱글턴**이다 — `getState()`가 자기 인스턴스가 올린 터널인지만 보므로, 액티비티/Application마다 따로 만들면 이미 떠 있는 터널을 못 보고 같은 개인키로 두 번째 장치를 올려 연결이 오락가락한다. `bringUp`/`bringDown`은 같은 락으로 직렬화하고, `bringUp`은 이미 떠 있으면 아무것도 하지 않는다.
 - **`RouterWol.kt`**: mobile-hub-viewer_v와 동일 — 공유기(iptime 등)에 내장된 원격 WOL API를 문서화되지 않은 로그인→wol/signal 흐름으로 직접 호출한다(TOFU 인증서 고정). 집 밖에서 WireGuard 없이도 PC를 켤 수 있는 대안 경로.
 - **`PairingConfig.kt`**: 이 프로젝트에서 새로 추가한 것 — Windows 컴패니언 QR에서 받은 host/port/token/mac을 암호화 저장한다. MAC은 PC의 `getmac` 결과를 그대로 받아오지만, 어댑터가 여러 개라 잘못 고른 경우를 위해 `saveMac()`으로 수동 덮어쓰기도 가능하다.
-- **`CompanionClient.kt`**: 이 프로젝트에서 새로 추가한 것 — Windows 컴패니언의 `/api/ping`·`/api/shutdown`·`/api/shutdown/cancel`을 호출하는 얇은 OkHttp 클라이언트. RouterWol과 달리 TLS 인증서 처리가 없다(같은 LAN 또는 WireGuard 터널 안의 평범한 http로만 통신한다고 가정).
-- **`MainActivity.kt`**: 버튼 4개(PC 켜기/PC 끄기/와이어가드 켜기/와이어가드 끄기) + 상태 카드(연결 대상, MAC, WireGuard 상태) + 설정 화면으로 가는 버튼 하나가 전부. **와이어가드는 토글 버튼 하나가 아니라 켜기/끄기 버튼을 따로 둔다** — 리모컨의 다른 버튼들처럼 사용자가 누른 상태를 그대로 유지하고(`onStart`/`onStop`에 걸어 자동으로 올리고 내리지 않음), mobile-hub-viewer_v의 android 앱과 달리 "화면을 보는 동안만 연결"이라는 전제 자체가 없다(감쌀 웹 콘텐츠가 없기 때문). PC 끄기는 확인 다이얼로그 → 컴패니언 API 호출 → 성공 시 10초짜리 Snackbar("취소" 액션 포함)로 진행한다.
-- **`SettingsActivity.kt`**: 자주 안 쓰는 것들(연결 정보 스캔, MAC 수동 입력, WireGuard 설정 스캔, 원격 WOL 설정, 전체 초기화)을 모은 별도 화면 — `MainActivity`의 "설정" 버튼으로 진입한다. 각 항목 아래에 현재 설정 여부를 보여주는 상태 문구가 있다(`refreshStatuses()`) — 필수(연결 정보)와 선택(WireGuard/원격 WOL)을 구분해서 표시한다.
+- **`CompanionClient.kt`**: 이 프로젝트에서 새로 추가한 것 — Windows 컴패니언의 `/api/ping`·`/api/shutdown`(선택적 `delay_seconds`)·`/api/shutdown/cancel`을 호출하는 얇은 OkHttp 클라이언트. RouterWol과 달리 TLS 인증서 처리가 없다(같은 LAN 또는 WireGuard 터널 안의 평범한 http로만 통신한다고 가정). 타임아웃을 8초로 넉넉히 둔 것은 와이어가드를 막 켠 직후 첫 요청이 핸드셰이크(유실 시 5초 뒤 재시도)를 기다려야 하기 때문이다.
+- **`NetworkProbe.kt`**: "지금 집 안인가"를 SSID 비교(위치 권한 필요, 같은 이름의 다른 망에 속을 수 있음) 대신 컴패니언 포트로 짧은 TCP 연결을 찔러 실제 도달 여부로 판단한다.
+- **`WireWolApplication.kt`**: `ProcessLifecycleOwner`로 **앱 전체**가 백그라운드로 가면 켜져 있던 와이어가드를 끄고, 다시 포그라운드로 오면 직전에 켜져 있던 경우에만 되살린다 — 액티비티 각각의 `onStart`/`onStop`이 아닌 이유는 메인↔설정 화면 전환은 앱을 나간 게 아니기 때문.
+- **`MainActivity.kt`**: 버튼 4개(PC 켜기/PC 끄기/와이어가드 켜기/와이어가드 끄기) + 예약 끄기 버튼 + 상태 카드(PC 전원 상태, 연결 대상, MAC, WireGuard 상태, 예약된 종료) + 설정 화면으로 가는 버튼 하나가 전부. **와이어가드는 토글 버튼 하나가 아니라 켜기/끄기 버튼을 따로 둔다** — 리모컨의 다른 버튼들처럼 사용자가 누른 상태를 그대로 유지하고(이 액티비티의 `onStart`/`onStop`에 걸어 자동으로 올리고 내리지 않음 — 앱 전체 백그라운드 처리는 `WireWolApplication` 담당), mobile-hub-viewer_v의 android 앱과 달리 "화면을 보는 동안만 연결"이라는 전제 자체가 없다(감쌀 웹 콘텐츠가 없기 때문).
+  - **전원 상태**: 화면이 떠 있는 동안 5초마다 `/api/ping`으로 자동 재확인(`startAutoRefresh`, `onPause`에서 정지). `onResume` 후 첫 확인에만 "확인 중…"을 띄우고 이후 반복 확인은 결과가 올 때까지 직전 상태를 유지한다(`hasCheckedPowerOnce`). 와이어가드 설정이 있는데 꺼져 있는 상태의 무응답은 "꺼짐"이 아니라 "응답 없음(와이어가드 필요)"으로 구분한다.
+  - **`ensureConnectivity`**: PC 켜기/끄기 앞에 거친다 — `NetworkProbe`로 직접 닿지 않으면 와이어가드를 자동으로 켜고(필요 시 VPN 권한 요청), `waitForTunnelReady`로 터널이 자리 잡을 시간을 번 뒤 원래 동작을 이어간다.
+  - **PC 켜기**: 매직 패킷을 `255.255.255.255`뿐 아니라 PC 주소 기준 /24 지정 브로드캐스트와 PC 주소 유니캐스트로도 보낸다(제한 브로드캐스트는 터널을 넘지 못함). 집 안에서 PC가 꺼져 있으면 탐지 실패로 와이어가드가 켜져 브로드캐스트가 터널로 빠지므로, `ensureConnectivity` **전에** 한 번 먼저 보낸다. 이후 원격 WOL(설정 시)과 전원 상태 폴링(처음엔 빠르게, 이후 느리게)을 시작한다.
+  - **PC 끄기/예약 끄기**: 확인 다이얼로그(예약은 시/분 NumberPicker) → 컴패니언 API 호출 → 즉시 끄기는 10초짜리 Snackbar("취소" 액션), 예약은 토스트. 컴패니언이 응답하지 않으면 절전일 수 있으므로 매직 패킷으로 깨운 뒤 ping이 살아날 때까지 기다렸다가 **한 번만** 재시도한다(`wakeThenRetryShutdown`). 예약 시각은 `shutdown_prefs`에 저장해 앱을 다시 열어도 상태 카드에 남고(탭하면 취소), 시각이 지나면 화면을 켜둔 채로도 스스로 숨긴다.
+  - **종료 후 와이어가드 자동 끄기**: 끄기 성공 시 와이어가드가 켜져 있었다면 예약 시각부터 ping을 반복해 **실제로 꺼진 것(무응답)을 확인한 뒤에만** 터널을 내린다(`armWireGuardOffWatch`) — 시각이 됐다고 바로 끄면 PC 쪽에서 종료가 취소된 경우에도 터널이 끊기기 때문. 감시 시작 시각을 prefs에 남겨 프로세스가 죽었다 살아나도 `onResume`에서 이어가며, 종료 취소·와이어가드 켜기/끄기·PC 켜기를 누르면 해제한다(`clearWireGuardOffWatch`).
+- **`SettingsActivity.kt`**: 자주 안 쓰는 것들(PC 등록, WireGuard 설정 스캔, 원격 WOL 설정, 저장된 정보 초기화)을 모은 별도 화면 — `MainActivity`의 "설정" 버튼으로 진입한다. "PC 등록"은 카메라 스캔 / 갤러리 이미지 디코딩(ZXing `MultiFormatReader`) / 직접 입력 중 고르게 하며, 직접 입력 창이 host/port/token/mac을 전부 고칠 수 있어 예전의 별도 "MAC 주소 직접 입력" 버튼을 흡수했다. WireGuard는 카메라/갤러리만 지원한다. 각 항목 아래에 현재 설정 여부를 보여주는 상태 문구가 있다(`refreshStatuses()`) — 필수(연결 정보)와 선택(WireGuard/원격 WOL)을 구분해서 표시한다.
 
 ## 코드 관례
 - Windows 쪽 페어링 QR JSON 스키마와 안드로이드 쪽 파싱은 서로의 계약이다 — 한쪽만 고치면 깨진다(위 아키텍처 절 참고).
