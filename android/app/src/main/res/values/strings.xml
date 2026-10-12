@@ -85,6 +85,19 @@
     <string name="router_wol_cleared">원격 WOL 설정을 삭제했습니다</string>
     <string name="router_wol_incomplete">모든 항목을 입력해주세요</string>
 
+    <string name="auto_shutdown_open_settings">PC 켜기 후 자동 종료</string>
+    <string name="auto_shutdown_settings_desc">PC 켜기로 켠 PC가 켜진 것이 확인되면, 아래 시간 뒤에 자동으로 종료되도록 예약합니다. 원격으로 켜두고 깜빡 잊고 못 끄는 것을 막아줍니다.</string>
+    <string name="auto_shutdown_enable">사용</string>
+    <string name="auto_shutdown_save">저장</string>
+    <string name="auto_shutdown_saved">자동 종료 설정을 저장했습니다</string>
+    <string name="settings_status_auto_shutdown_on">✓ 사용 — 켜진 뒤 %1$s 후 종료</string>
+    <string name="settings_status_auto_shutdown_off">사용 안 함</string>
+    <string name="duration_hours_minutes">%1$d시간 %2$d분</string>
+    <string name="duration_hours">%1$d시간</string>
+    <string name="duration_minutes">%1$d분</string>
+    <string name="auto_shutdown_scheduled">PC가 켜져 %1$s에 자동 종료되도록 예약했습니다</string>
+    <string name="auto_shutdown_failed">자동 종료 예약 실패: %1$s</string>
+
     <string name="pairing_manual_title">PC 등록 (직접 입력)</string>
     <string name="pairing_host_hint">PC 주소 (IP)</string>
     <string name="pairing_port_hint">포트</string>
@@ -94,7 +107,7 @@
     <string name="pairing_manual_incomplete">PC 주소/포트/토큰을 입력해주세요</string>
 
     <string name="clear_all_title">저장된 정보 초기화</string>
-    <string name="clear_all_message">연결 정보, WireGuard 설정, 원격 WOL 설정을 모두 지웁니다. 계속할까요?</string>
+    <string name="clear_all_message">연결 정보, WireGuard 설정, 원격 WOL 설정, 자동 종료 설정을 모두 지웁니다. 계속할까요?</string>
     <string name="clear_all_ok">초기화</string>
     <string name="clear_all_done">모두 초기화했습니다</string>
 

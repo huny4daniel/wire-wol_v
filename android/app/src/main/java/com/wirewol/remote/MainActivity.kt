@@ -47,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var pairingConfig: PairingConfig
     private lateinit var routerWol: RouterWol
     private lateinit var wireGuard: WireGuardController
+    private lateinit var autoShutdown: AutoShutdownConfig
     private val companionClient = CompanionClient()
     private val handler = Handler(Looper.getMainLooper())
 
@@ -112,6 +113,7 @@ class MainActivity : AppCompatActivity() {
         pairingConfig = PairingConfig(this)
         routerWol = RouterWol(this)
         wireGuard = WireGuardController(this)
+        autoShutdown = AutoShutdownConfig(this)
 
         rootView = findViewById(R.id.root)
         statusPowerText = findViewById(R.id.statusPowerText)
@@ -147,6 +149,7 @@ class MainActivity : AppCompatActivity() {
         // onPause에서 멈추지 않는 이유: PC 종료는 보통 앱을 내려둔 사이에
         // 일어나므로, 화면을 벗어났다고 감시를 멈추면 터널이 계속 남는다.
         resumeWireGuardOffWatch()
+        resumeAutoShutdownWait()
     }
 
     override fun onPause() {
@@ -273,6 +276,7 @@ class MainActivity : AppCompatActivity() {
                         handler.postDelayed(this, nextInterval)
                     } else {
                         powerPollRunnable = null
+                        scheduleAutoShutdownIfPending(pairing)
                     }
                 }
             }
@@ -369,6 +373,11 @@ class MainActivity : AppCompatActivity() {
         // 다시 켜려는 참이니 이전 종료의 "확인 후 와이어가드 끄기" 감시가
         // 켜기 흐름 중에 터널을 끊지 않도록 해제한다.
         clearWireGuardOffWatch()
+        if (autoShutdown.enabled) {
+            shutdownPrefs.edit().putLong(KEY_AUTO_SHUTDOWN_WAIT_FROM, System.currentTimeMillis()).apply()
+        } else {
+            shutdownPrefs.edit().remove(KEY_AUTO_SHUTDOWN_WAIT_FROM).apply()
+        }
         sendWakeOnLan(mac)
         ensureConnectivity {
             sendWakeOnLan(mac)
@@ -417,6 +426,50 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 android.util.Log.e("WireWOL", "매직 패킷 전송 실패", e)
+            }
+        }.start()
+    }
+
+    // "PC 켜기 후 자동 종료" 대기 — PC 켜기를 누른 시각을 prefs에 남겨두고, 전원
+    // 폴링이 켜짐을 확인하는 순간 자동 예약을 건다. 폴링은 화면을 벗어나면
+    // 멈추므로(onPause), 켜기만 눌러두고 앱을 내렸다가 돌아온 경우에도 대기
+    // 시간 안이면 onResume에서 폴링을 다시 시작해 이어서 확인한다.
+    private fun resumeAutoShutdownWait() {
+        val waitFrom = shutdownPrefs.getLong(KEY_AUTO_SHUTDOWN_WAIT_FROM, 0L)
+        if (waitFrom == 0L) return
+        val pairing = pairingConfig.load()
+        if (pairing == null || !autoShutdown.enabled ||
+            System.currentTimeMillis() - waitFrom > AUTO_SHUTDOWN_WAIT_TIMEOUT_MS
+        ) {
+            shutdownPrefs.edit().remove(KEY_AUTO_SHUTDOWN_WAIT_FROM).apply()
+            return
+        }
+        if (powerPollRunnable == null) startPowerOnPolling(pairing)
+    }
+
+    // 켜짐이 확인되면 설정된 시간 뒤로 종료를 예약한다. 사용자가 이미 걸어둔
+    // 예약(예약 끄기 등)이 남아있으면 그쪽을 존중해 덮어쓰지 않는다. 방금 ping이
+    // 성공한 직후라 연결 확인(ensureConnectivity)이나 깨우기 재시도는 필요 없다.
+    private fun scheduleAutoShutdownIfPending(pairing: PairingConfig.Info) {
+        val waitFrom = shutdownPrefs.getLong(KEY_AUTO_SHUTDOWN_WAIT_FROM, 0L)
+        if (waitFrom == 0L) return
+        shutdownPrefs.edit().remove(KEY_AUTO_SHUTDOWN_WAIT_FROM).apply()
+        if (!autoShutdown.enabled || System.currentTimeMillis() - waitFrom > AUTO_SHUTDOWN_WAIT_TIMEOUT_MS) return
+        if (shutdownPrefs.getLong(KEY_PENDING_SHUTDOWN, 0L) > System.currentTimeMillis()) return
+        val delaySeconds = autoShutdown.delayMinutes * 60
+        val config = CompanionClient.Config(pairing.host, pairing.port, pairing.token)
+        Thread {
+            val result = companionClient.shutdown(config, delaySeconds)
+            handler.post {
+                when (result) {
+                    is CompanionClient.Result.Success -> {
+                        val targetMillis = recordScheduledShutdown(delaySeconds)
+                        val timeLabel = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(targetMillis))
+                        Toast.makeText(this, getString(R.string.auto_shutdown_scheduled, timeLabel), Toast.LENGTH_LONG).show()
+                    }
+                    is CompanionClient.Result.Failure ->
+                        Toast.makeText(this, getString(R.string.auto_shutdown_failed, result.message), Toast.LENGTH_LONG).show()
+                }
             }
         }.start()
     }
@@ -573,16 +626,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onShutdownScheduled(delaySeconds: Int) {
-        val targetMillis = System.currentTimeMillis() + delaySeconds * 1000L
-        shutdownPrefs.edit().putLong(KEY_PENDING_SHUTDOWN, targetMillis).apply()
-        updatePendingShutdownStatus()
-        armWireGuardOffWatch(targetMillis)
+        val targetMillis = recordScheduledShutdown(delaySeconds)
         if (delaySeconds <= QUICK_SHUTDOWN_SECONDS) {
             showShutdownScheduledSnackbar()
         } else {
             val timeLabel = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(targetMillis))
             Toast.makeText(this, getString(R.string.shutdown_scheduled_at, timeLabel), Toast.LENGTH_LONG).show()
         }
+    }
+
+    // 예약 시각을 남겨 상태 카드에 표시하고 종료 확인 후 와이어가드 끄기 감시를
+    // 건다 — PC 끄기/예약 끄기/자동 종료 예약이 공통으로 거친다.
+    private fun recordScheduledShutdown(delaySeconds: Int): Long {
+        val targetMillis = System.currentTimeMillis() + delaySeconds * 1000L
+        shutdownPrefs.edit().putLong(KEY_PENDING_SHUTDOWN, targetMillis).apply()
+        updatePendingShutdownStatus()
+        armWireGuardOffWatch(targetMillis)
+        return targetMillis
     }
 
     // PC 끄기가 성공하면 와이어가드를 켜둔 경우에 한해 "종료 확인 후 와이어가드
@@ -756,6 +816,8 @@ class MainActivity : AppCompatActivity() {
         private const val QUICK_SHUTDOWN_SECONDS = 10
         private const val KEY_PENDING_SHUTDOWN = "pending_shutdown_at"
         private const val KEY_WIREGUARD_OFF_WATCH_FROM = "wireguard_off_watch_from"
+        private const val KEY_AUTO_SHUTDOWN_WAIT_FROM = "auto_shutdown_wait_from"
+        private const val AUTO_SHUTDOWN_WAIT_TIMEOUT_MS = 10 * 60_000L
         private const val WIREGUARD_OFF_WATCH_INTERVAL_MS = 5_000L
         private const val WIREGUARD_OFF_WATCH_TIMEOUT_MS = 10 * 60_000L
         private const val WIREGUARD_STATUS_RECHECK_DELAY_MS = 1200L

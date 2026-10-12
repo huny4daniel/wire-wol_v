@@ -3,9 +3,12 @@ package com.wirewol.remote
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.text.InputType
+import android.view.Gravity
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.NumberPicker
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,11 +42,13 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var pairingConfig: PairingConfig
     private lateinit var routerWol: RouterWol
     private lateinit var wireGuard: WireGuardController
+    private lateinit var autoShutdown: AutoShutdownConfig
 
     private lateinit var scanPairingStatus: TextView
     private lateinit var editMacStatus: TextView
     private lateinit var scanWireGuardStatus: TextView
     private lateinit var routerWolStatus: TextView
+    private lateinit var autoShutdownStatus: TextView
 
     private enum class ScanTarget { PAIRING, WIREGUARD }
     private var pendingScanTarget = ScanTarget.PAIRING
@@ -96,16 +101,19 @@ class SettingsActivity : AppCompatActivity() {
         pairingConfig = PairingConfig(this)
         routerWol = RouterWol(this)
         wireGuard = WireGuardController(this)
+        autoShutdown = AutoShutdownConfig(this)
 
         scanPairingStatus = findViewById(R.id.scanPairingStatus)
         editMacStatus = findViewById(R.id.editMacStatus)
         scanWireGuardStatus = findViewById(R.id.scanWireGuardStatus)
         routerWolStatus = findViewById(R.id.routerWolStatus)
+        autoShutdownStatus = findViewById(R.id.autoShutdownStatus)
 
         findViewById<Button>(R.id.backButton).setOnClickListener { finish() }
         findViewById<Button>(R.id.scanPairingButton).setOnClickListener { launchScan(ScanTarget.PAIRING) }
         findViewById<Button>(R.id.scanWireGuardButton).setOnClickListener { launchScan(ScanTarget.WIREGUARD) }
         findViewById<Button>(R.id.routerWolSettingsButton).setOnClickListener { showRouterWolSettingsDialog() }
+        findViewById<Button>(R.id.autoShutdownButton).setOnClickListener { showAutoShutdownSettingsDialog() }
         findViewById<Button>(R.id.clearAllButton).setOnClickListener { showClearAllDialog() }
 
         refreshStatuses()
@@ -145,6 +153,84 @@ class SettingsActivity : AppCompatActivity() {
             getString(R.string.settings_status_router_wol_missing)
         }
 
+        autoShutdownStatus.text = if (autoShutdown.enabled) {
+            getString(R.string.settings_status_auto_shutdown_on, formatDuration(autoShutdown.delayMinutes))
+        } else {
+            getString(R.string.settings_status_auto_shutdown_off)
+        }
+    }
+
+    private fun formatDuration(totalMinutes: Int): String {
+        val hours = totalMinutes / 60
+        val minutes = totalMinutes % 60
+        return when {
+            hours == 0 -> getString(R.string.duration_minutes, minutes)
+            minutes == 0 -> getString(R.string.duration_hours, hours)
+            else -> getString(R.string.duration_hours_minutes, hours, minutes)
+        }
+    }
+
+    // "PC 켜기 후 자동 종료" 설정창 — 사용 여부와, 켜진 뒤 몇 시간 몇 분 후에
+    // 끌지를 MainActivity의 예약 끄기와 같은 시/분 NumberPicker로 고른다.
+    private fun showAutoShutdownSettingsDialog() {
+        val padding = (24 * resources.displayMetrics.density).toInt()
+        val current = autoShutdown.delayMinutes
+        val enableCheck = CheckBox(this).apply {
+            text = getString(R.string.auto_shutdown_enable)
+            isChecked = autoShutdown.enabled
+        }
+        val hourPicker = NumberPicker(this).apply {
+            minValue = 0
+            maxValue = 23
+            value = current / 60
+        }
+        val minutePicker = NumberPicker(this).apply {
+            minValue = 0
+            maxValue = 59
+            value = current % 60
+        }
+        val hourLabel = TextView(this).apply {
+            text = getString(R.string.schedule_shutdown_hours_label)
+            gravity = Gravity.CENTER
+            setPadding(padding / 4, 0, padding / 2, 0)
+        }
+        val minuteLabel = TextView(this).apply {
+            text = getString(R.string.schedule_shutdown_minutes_label)
+            gravity = Gravity.CENTER
+            setPadding(padding / 4, 0, 0, 0)
+        }
+        val pickerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(hourPicker)
+            addView(hourLabel)
+            addView(minutePicker)
+            addView(minuteLabel)
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding / 2, padding, 0)
+            addView(enableCheck)
+            addView(pickerRow)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.auto_shutdown_open_settings)
+            .setMessage(R.string.auto_shutdown_settings_desc)
+            .setView(container)
+            .setPositiveButton(R.string.auto_shutdown_save) { _, _ ->
+                val delayMinutes = hourPicker.value * 60 + minutePicker.value
+                if (enableCheck.isChecked && delayMinutes <= 0) {
+                    Toast.makeText(this, R.string.schedule_shutdown_zero, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                autoShutdown.enabled = enableCheck.isChecked
+                if (delayMinutes > 0) autoShutdown.delayMinutes = delayMinutes
+                Toast.makeText(this, R.string.auto_shutdown_saved, Toast.LENGTH_SHORT).show()
+                refreshStatuses()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     // PAIRING(=PC 등록)은 QR이 없어도 host/port/token/mac을 직접 입력할 수
@@ -310,6 +396,7 @@ class SettingsActivity : AppCompatActivity() {
                 pairingConfig.clear()
                 wireGuard.clearConfig()
                 routerWol.clearConfig()
+                autoShutdown.clear()
                 Toast.makeText(this, R.string.clear_all_done, Toast.LENGTH_SHORT).show()
                 refreshStatuses()
             }
