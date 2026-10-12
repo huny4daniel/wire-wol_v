@@ -76,6 +76,50 @@ class SettingsActivity : AppCompatActivity() {
         dispatchScanResult(decoded)
     }
 
+    // 설정 내보내기 — 비밀번호를 먼저 받아두고 저장할 파일 위치를 고르게 한다.
+    private var pendingExportPassword: String? = null
+
+    private val exportFileLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val password = pendingExportPassword
+        pendingExportPassword = null
+        if (uri == null || password == null) return@registerForActivityResult
+        val contents = SettingsBackup.collect(pairingConfig, wireGuard, routerWol, autoShutdown)
+        Toast.makeText(this, R.string.settings_backup_working, Toast.LENGTH_SHORT).show()
+        Thread {
+            val error = try {
+                val text = SettingsBackup.export(contents, password)
+                contentResolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                    ?: throw IllegalStateException("파일을 열 수 없습니다")
+                null
+            } catch (e: Exception) {
+                e.message ?: e.javaClass.simpleName
+            }
+            runOnUiThread {
+                if (error == null) {
+                    Toast.makeText(this, R.string.settings_backup_exported, Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, getString(R.string.settings_backup_export_failed, error), Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    // 설정 불러오기 — 파일을 먼저 고른 뒤 비밀번호를 받는다. 파일 관리자/클라우드
+    // 앱이 .json의 MIME을 제각각 알려주므로 형식을 거르지 않고 내용으로 판별한다.
+    private val importFileLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        val text = try {
+            contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+        } catch (e: Exception) {
+            null
+        }
+        if (text.isNullOrBlank()) {
+            Toast.makeText(this, R.string.settings_backup_invalid, Toast.LENGTH_SHORT).show()
+            return@registerForActivityResult
+        }
+        showImportPasswordDialog(text)
+    }
+
     private fun dispatchScanResult(scanned: String) {
         when (pendingScanTarget) {
             ScanTarget.PAIRING -> handlePairingScan(scanned)
@@ -114,6 +158,8 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<Button>(R.id.scanWireGuardButton).setOnClickListener { launchScan(ScanTarget.WIREGUARD) }
         findViewById<Button>(R.id.routerWolSettingsButton).setOnClickListener { showRouterWolSettingsDialog() }
         findViewById<Button>(R.id.autoShutdownButton).setOnClickListener { showAutoShutdownSettingsDialog() }
+        findViewById<Button>(R.id.exportSettingsButton).setOnClickListener { showExportPasswordDialog() }
+        findViewById<Button>(R.id.importSettingsButton).setOnClickListener { importFileLauncher.launch(arrayOf("*/*")) }
         findViewById<Button>(R.id.clearAllButton).setOnClickListener { showClearAllDialog() }
 
         refreshStatuses()
@@ -382,6 +428,95 @@ class SettingsActivity : AppCompatActivity() {
                 }
                 pairingConfig.save(host, port, token, mac)
                 Toast.makeText(this, R.string.pairing_saved, Toast.LENGTH_SHORT).show()
+                refreshStatuses()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun passwordField(hintRes: Int) = EditText(this).apply {
+        hint = getString(hintRes)
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+    }
+
+    private fun dialogContainer(vararg views: android.view.View): LinearLayout {
+        val padding = (24 * resources.displayMetrics.density).toInt()
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding / 2, padding, 0)
+            views.forEach { addView(it) }
+        }
+    }
+
+    private fun showExportPasswordDialog() {
+        val passwordInput = passwordField(R.string.settings_backup_password_hint)
+        val confirmInput = passwordField(R.string.settings_backup_password_confirm_hint)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.settings_backup_export_title)
+            .setMessage(R.string.settings_backup_export_desc)
+            .setView(dialogContainer(passwordInput, confirmInput))
+            .setPositiveButton(R.string.settings_backup_next) { _, _ ->
+                val password = passwordInput.text.toString()
+                when {
+                    password.isEmpty() ->
+                        Toast.makeText(this, R.string.settings_backup_password_empty, Toast.LENGTH_SHORT).show()
+                    password != confirmInput.text.toString() ->
+                        Toast.makeText(this, R.string.settings_backup_password_mismatch, Toast.LENGTH_SHORT).show()
+                    else -> {
+                        pendingExportPassword = password
+                        exportFileLauncher.launch(SettingsBackup.FILE_NAME)
+                    }
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun showImportPasswordDialog(fileText: String) {
+        val passwordInput = passwordField(R.string.settings_backup_password_hint)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.settings_backup_import_title)
+            .setMessage(R.string.settings_backup_import_desc)
+            .setView(dialogContainer(passwordInput))
+            .setPositiveButton(R.string.settings_backup_next) { _, _ ->
+                val password = passwordInput.text.toString()
+                if (password.isEmpty()) {
+                    Toast.makeText(this, R.string.settings_backup_password_empty, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                Toast.makeText(this, R.string.settings_backup_working, Toast.LENGTH_SHORT).show()
+                Thread {
+                    val result = try {
+                        Result.success(SettingsBackup.import(fileText, password))
+                    } catch (e: Exception) {
+                        Result.failure(e)
+                    }
+                    runOnUiThread {
+                        result.fold(
+                            onSuccess = { confirmImport(it) },
+                            onFailure = { e ->
+                                if (e is SettingsBackup.WrongPasswordException) {
+                                    Toast.makeText(this, R.string.settings_backup_wrong_password, Toast.LENGTH_SHORT).show()
+                                    showImportPasswordDialog(fileText)
+                                } else {
+                                    Toast.makeText(this, R.string.settings_backup_invalid, Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                        )
+                    }
+                }.start()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun confirmImport(contents: SettingsBackup.Contents) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.settings_backup_confirm_title)
+            .setMessage(R.string.settings_backup_confirm_message)
+            .setPositiveButton(R.string.settings_backup_confirm_ok) { _, _ ->
+                SettingsBackup.apply(contents, pairingConfig, wireGuard, routerWol, autoShutdown)
+                Toast.makeText(this, R.string.settings_backup_imported, Toast.LENGTH_SHORT).show()
                 refreshStatuses()
             }
             .setNegativeButton(R.string.cancel, null)

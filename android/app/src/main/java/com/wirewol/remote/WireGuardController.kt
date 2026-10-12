@@ -57,6 +57,8 @@ class WireGuardController(context: Context) {
         prefs.edit().putString(KEY_CONF, raw).apply()
     }
 
+    fun loadConfigText(): String? = prefs.getString(KEY_CONF, null)?.ifBlank { null }
+
     fun clearConfig() {
         prefs.edit().remove(KEY_CONF).apply()
     }

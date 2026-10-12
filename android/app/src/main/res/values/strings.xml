@@ -98,6 +98,28 @@
     <string name="auto_shutdown_scheduled">PC가 켜져 %1$s에 자동 종료되도록 예약했습니다</string>
     <string name="auto_shutdown_failed">자동 종료 예약 실패: %1$s</string>
 
+    <string name="export_settings">설정 내보내기</string>
+    <string name="import_settings">설정 불러오기</string>
+    <string name="settings_backup_hint">모든 설정을 비밀번호로 암호화한 파일 하나로 저장하거나 불러옵니다. WireWOL PC(윈도우판)와 파일을 서로 주고받을 수 있습니다.</string>
+    <string name="settings_backup_password_hint">비밀번호</string>
+    <string name="settings_backup_password_confirm_hint">비밀번호 확인</string>
+    <string name="settings_backup_export_title">설정 내보내기</string>
+    <string name="settings_backup_export_desc">파일에는 PC 토큰, WireGuard 개인키, 공유기 비밀번호가 담깁니다. 불러올 때 필요한 비밀번호를 정해주세요.</string>
+    <string name="settings_backup_import_title">설정 불러오기</string>
+    <string name="settings_backup_import_desc">내보낼 때 정한 비밀번호를 입력해주세요.</string>
+    <string name="settings_backup_next">다음</string>
+    <string name="settings_backup_password_empty">비밀번호를 입력해주세요</string>
+    <string name="settings_backup_password_mismatch">비밀번호가 서로 다릅니다</string>
+    <string name="settings_backup_working">처리 중…</string>
+    <string name="settings_backup_exported">설정을 파일로 내보냈습니다</string>
+    <string name="settings_backup_export_failed">내보내기 실패: %1$s</string>
+    <string name="settings_backup_invalid">WireWOL 설정 파일이 아니거나 손상된 파일입니다</string>
+    <string name="settings_backup_wrong_password">비밀번호가 틀렸습니다</string>
+    <string name="settings_backup_confirm_title">설정 덮어쓰기</string>
+    <string name="settings_backup_confirm_message">지금 저장된 설정을 모두 지우고 파일의 설정으로 바꿉니다. 계속할까요?</string>
+    <string name="settings_backup_confirm_ok">불러오기</string>
+    <string name="settings_backup_imported">설정을 불러왔습니다</string>
+
     <string name="pairing_manual_title">PC 등록 (직접 입력)</string>
     <string name="pairing_host_hint">PC 주소 (IP)</string>
     <string name="pairing_port_hint">포트</string>

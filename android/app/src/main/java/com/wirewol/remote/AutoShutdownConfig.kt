@@ -29,6 +29,6 @@ class AutoShutdownConfig(context: Context) {
     companion object {
         private const val KEY_ENABLED = "enabled"
         private const val KEY_DELAY_MINUTES = "delay_minutes"
-        private const val DEFAULT_DELAY_MINUTES = 60
+        const val DEFAULT_DELAY_MINUTES = 60
     }
 }

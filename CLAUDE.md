@@ -58,9 +58,11 @@ WebView가 전혀 없는 순수 네이티브 단일 화면(`MainActivity`) — �
   - **종료 후 와이어가드 자동 끄기**: 끄기 성공 시 와이어가드가 켜져 있었다면 예약 시각부터 ping을 반복해 **실제로 꺼진 것(무응답)을 확인한 뒤에만** 터널을 내린다(`armWireGuardOffWatch`) — 시각이 됐다고 바로 끄면 PC 쪽에서 종료가 취소된 경우에도 터널이 끊기기 때문. 감시 시작 시각을 prefs에 남겨 프로세스가 죽었다 살아나도 `onResume`에서 이어가며, 종료 취소·와이어가드 켜기/끄기·PC 켜기를 누르면 해제한다(`clearWireGuardOffWatch`).
   - **PC 켜기 후 자동 종료**(`AutoShutdownConfig`가 켜져 있을 때): PC 켜기를 누른 시각을 `shutdown_prefs`에 남기고, 전원 폴링이 켜짐을 확인하는 순간 설정된 지연으로 `/api/shutdown`을 호출한다(`scheduleAutoShutdownIfPending`) — 이후는 예약 끄기와 같은 경로(`recordScheduledShutdown`: 상태 카드 표시 + 와이어가드 끄기 감시). 사용자가 걸어둔 예약이 남아있으면 덮어쓰지 않는다. 폴링이 `onPause`에서 멈추므로, 대기 시간(10분) 안에 돌아오면 `onResume`에서 폴링을 다시 시작해 이어서 확인한다(`resumeAutoShutdownWait`).
 - **`AutoShutdownConfig.kt`**: "PC 켜기 후 자동 종료" 사용 여부(기본 꺼짐)와 지연(분)을 담는 평범한(비암호화) prefs.
-- **`SettingsActivity.kt`**: 자주 안 쓰는 것들(PC 등록, WireGuard 설정 스캔, 원격 WOL 설정, PC 켜기 후 자동 종료, 저장된 정보 초기화)을 모은 별도 화면 — `MainActivity`의 "설정" 버튼으로 진입한다. "PC 등록"은 카메라 스캔 / 갤러리 이미지 디코딩(ZXing `MultiFormatReader`) / 직접 입력 중 고르게 하며, 직접 입력 창이 host/port/token/mac을 전부 고칠 수 있어 예전의 별도 "MAC 주소 직접 입력" 버튼을 흡수했다. WireGuard는 카메라/갤러리만 지원한다. 각 항목 아래에 현재 설정 여부를 보여주는 상태 문구가 있다(`refreshStatuses()`) — 필수(연결 정보)와 선택(WireGuard/원격 WOL)을 구분해서 표시한다.
+- **`SettingsBackup.kt`**: 설정 전체(페어링/WireGuard .conf/원격 WOL/자동 종료)를 비밀번호로 암호화한 JSON 파일로 내보내고 불러온다 — PBKDF2-HMAC-SHA256(비밀번호는 UTF-8, 플랫폼 SecretKeyFactory 대신 HmacSHA256으로 직접 계산해 파이썬 `hashlib.pbkdf2_hmac`과 같은 키가 나오게 함) + AES-256-GCM. **`wire-wol-pc_v/app/settings_backup.py`와 같은 파일 형식이라 서로 주고받을 수 있다 — 형식/필드를 바꾸면 양쪽을 함께 고칠 것.** 공유기 인증서 지문(TOFU)과 예약 시각 같은 기기별 상태는 담지 않는다. 불러오기는 현재 설정을 통째로 교체한다(파일에 없는 항목은 지움).
+- **`SettingsActivity.kt`**: 자주 안 쓰는 것들(PC 등록, WireGuard 설정 스캔, 원격 WOL 설정, PC 켜기 후 자동 종료, 설정 내보내기/불러오기, 저장된 정보 초기화)을 모은 별도 화면 — `MainActivity`의 "설정" 버튼으로 진입한다. "PC 등록"은 카메라 스캔 / 갤러리 이미지 디코딩(ZXing `MultiFormatReader`) / 직접 입력 중 고르게 하며, 직접 입력 창이 host/port/token/mac을 전부 고칠 수 있어 예전의 별도 "MAC 주소 직접 입력" 버튼을 흡수했다. WireGuard는 카메라/갤러리만 지원한다. 각 항목 아래에 현재 설정 여부를 보여주는 상태 문구가 있다(`refreshStatuses()`) — 필수(연결 정보)와 선택(WireGuard/원격 WOL)을 구분해서 표시한다.
 
 ## 코드 관례
 - Windows 쪽 페어링 QR JSON 스키마와 안드로이드 쪽 파싱은 서로의 계약이다 — 한쪽만 고치면 깨진다(위 아키텍처 절 참고).
+- 설정 백업 파일 형식(`SettingsBackup.kt`)은 `wire-wol-pc_v`(윈도우판 리모컨)의 `app/settings_backup.py`와의 계약이다.
 - `mobile-hub-viewer_v`의 코드를 옮겨 적은 파일(`WireGuardController.kt`/`RouterWol.kt`/`app/tray.py`/`app/process_utils.py`)은 그쪽 구현이 바뀌어도 자동 동기화되지 않는 의도적인 복제다 — 원본에서 버그를 고쳤다면 여기도 확인할 것.
 - `mobile-hub-viewer_v`와 달리 이 프로젝트는 **PC에 실제로 쓰기 동작(종료 명령)을 수행한다** — 새 API를 추가할 때 인증(토큰 검사)을 빠뜨리지 않을 것.
