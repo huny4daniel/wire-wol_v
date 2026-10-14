@@ -63,10 +63,9 @@ class WireGuardController(context: Context) {
         prefs.edit().remove(KEY_CONF).apply()
     }
 
-    private fun loadParsedConfig(): Config? {
-        val raw = prefs.getString(KEY_CONF, null) ?: return null
+    private fun parseConfig(text: String): Config? {
         return try {
-            Config.parse(BufferedReader(StringReader(raw)))
+            Config.parse(BufferedReader(StringReader(text)))
         } catch (e: Exception) {
             Log.e(TAG, "WireGuard 설정 파싱 실패", e)
             null
@@ -84,13 +83,23 @@ class WireGuardController(context: Context) {
     // 반드시 VpnService.prepare()로 사용자 승인을 먼저 받은 뒤(필요한 경우)에만
     // 호출할 것 — 네트워크/네이티브 호출이 섞여 있으니 백그라운드 스레드에서
     // 호출한다.
+    // 지금 망에서 터널이 맡을 주소(SplitTunnel.routesFor) — 비어 있으면 PC와 같은 대역(집
+    // 안)이거나 PC가 등록되지 않아 터널이 필요 없다. 백그라운드 스레드에서 호출할 것.
+    fun routesForPairing(): List<String> =
+        PairingConfig(appContext).load()?.let { SplitTunnel.routesFor(listOf(it.host)) }.orEmpty()
+
+    // 터널은 PC 대역만 맡는다(SplitTunnel) — 집 안이라 맡을 주소가 없으면 올리지 않고 false.
     fun bringUp(): Boolean = synchronized(lock) {
-        val config = loadParsedConfig() ?: return false
+        val raw = prefs.getString(KEY_CONF, null) ?: return false
         // 이미 떠 있으면 다시 올리지 않는다(WireWolApplication의 복귀 시 재연결과
         // 버튼/자동 연결이 동시에 들어오는 경우).
         if (isUp()) return true
+        val routes = routesForPairing()
+        if (routes.isEmpty()) return false
+        val config = parseConfig(SplitTunnel.apply(raw, routes)) ?: return false
         try {
             backend.setState(tunnel, Tunnel.State.UP, config)
+            activeRoutes = routes
             true
         } catch (e: Exception) {
             Log.e(TAG, "터널 연결 실패", e)
@@ -99,6 +108,7 @@ class WireGuardController(context: Context) {
     }
 
     fun bringDown() = synchronized(lock) {
+        activeRoutes = null
         try {
             backend.setState(tunnel, Tunnel.State.DOWN, null)
         } catch (e: Exception) {
@@ -106,7 +116,22 @@ class WireGuardController(context: Context) {
         }
     }
 
+    // 터널이 켜진 채로 망이 바뀌어(예: 집에 들어옴) 맡을 주소가 달라졌으면 다시 맞춘다 —
+    // 집 안이면 끈다. 바꿨으면 true. 백그라운드 스레드에서 호출할 것.
+    fun refreshForNetwork(): Boolean = synchronized(lock) {
+        if (!isUp()) return false
+        val routes = routesForPairing()
+        if (routes == activeRoutes) return false
+        bringDown()
+        if (routes.isNotEmpty()) bringUp()
+        true
+    }
+
     companion object {
+        // 지금 켜 둔 터널이 맡은 주소(프로세스 전체에서 하나 — backend/tunnel과 같은 이유).
+        @Volatile
+        private var activeRoutes: List<String>? = null
+
         // bringUp/bringDown이 동시에 들어오지 않게 막는 락(백엔드 생성도 겸한다).
         private val lock = Any()
 

@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     // 콜백 — 버튼을 누르지 않고 화면만 보고 있어도 상태가 최신으로 유지되게
     // 한다. powerPollRunnable과 마찬가지로 onPause에서 반드시 멈춘다.
     private var autoRefreshRunnable: Runnable? = null
+    private var tunnelRefreshInFlight = false
 
     // PC 끄기가 성공한 뒤 PC가 실제로 꺼졌는지(ping 무응답) 확인되면 그때
     // 와이어가드를 끄기 위한 감시 콜백 — 종료 취소, 와이어가드 켜기/끄기, PC
@@ -167,11 +168,26 @@ class MainActivity : AppCompatActivity() {
                 if (powerPollRunnable == null) {
                     checkPowerStatus(pairingConfig.load())
                 }
+                refreshTunnelForNetwork()
                 handler.postDelayed(this, AUTO_REFRESH_INTERVAL_MS)
             }
         }
         autoRefreshRunnable = runnable
         handler.postDelayed(runnable, AUTO_REFRESH_INTERVAL_MS)
+    }
+
+    // 터널이 켜진 채로 망이 바뀌면(예: 집에 들어옴) 터널이 맡을 주소를 다시 맞춘다 — 집
+    // 안이면 끈다(켜 둔 채면 PC 접속이 공유기를 한 바퀴 돌아야 한다).
+    private fun refreshTunnelForNetwork() {
+        if (tunnelRefreshInFlight || !wireGuard.isUp()) return
+        tunnelRefreshInFlight = true
+        Thread {
+            val changed = wireGuard.refreshForNetwork()
+            handler.post {
+                tunnelRefreshInFlight = false
+                if (changed) refreshWireGuardStatus()
+            }
+        }.start()
     }
 
     private fun stopAutoRefresh() {
@@ -320,7 +336,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         Thread {
-            val reachable = NetworkProbe.isReachableDirectly(pairing.host, pairing.port.toIntOrNull() ?: 0)
+            // PC와 같은 대역(집 안 — PC가 꺼져 있어도 판단된다)이면 터널이 필요 없다.
+            val reachable = wireGuard.routesForPairing().isEmpty() ||
+                NetworkProbe.isReachableDirectly(pairing.host, pairing.port.toIntOrNull() ?: 0)
             handler.post {
                 if (reachable) {
                     onReady()
@@ -785,6 +803,24 @@ class MainActivity : AppCompatActivity() {
             updateStatus()
             return
         }
+        // 터널은 PC 대역만 맡으므로(SplitTunnel) PC가 등록돼 있어야 하고, PC와 같은 망이면 필요 없다.
+        if (pairingConfig.load() == null) {
+            Toast.makeText(this, R.string.pairing_missing, Toast.LENGTH_LONG).show()
+            return
+        }
+        Thread {
+            val home = wireGuard.routesForPairing().isEmpty()
+            handler.post {
+                if (home) {
+                    Toast.makeText(this, R.string.wireguard_not_needed, Toast.LENGTH_LONG).show()
+                } else {
+                    startWireGuard()
+                }
+            }
+        }.start()
+    }
+
+    private fun startWireGuard() {
         Toast.makeText(this, R.string.wireguard_connecting, Toast.LENGTH_SHORT).show()
         val prepareIntent = VpnService.prepare(this)
         if (prepareIntent != null) {

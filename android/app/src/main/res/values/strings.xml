@@ -71,6 +71,7 @@
     <string name="wireguard_saved">WireGuard 설정을 저장했습니다</string>
     <string name="wireguard_missing">WireGuard 설정이 없습니다 — 먼저 스캔해주세요</string>
     <string name="wireguard_connecting">VPN 연결 중…</string>
+    <string name="wireguard_not_needed">PC와 같은 네트워크에 있어 와이어가드가 필요 없습니다</string>
     <string name="wireguard_failed">VPN 연결에 실패했습니다</string>
 
     <string name="router_wol_settings_title">원격 WOL 설정</string>
