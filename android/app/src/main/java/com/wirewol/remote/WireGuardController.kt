@@ -83,10 +83,17 @@ class WireGuardController(context: Context) {
     // 반드시 VpnService.prepare()로 사용자 승인을 먼저 받은 뒤(필요한 경우)에만
     // 호출할 것 — 네트워크/네이티브 호출이 섞여 있으니 백그라운드 스레드에서
     // 호출한다.
-    // 지금 망에서 터널이 맡을 주소(SplitTunnel.routesFor) — 비어 있으면 PC와 같은 대역(집
-    // 안)이거나 PC가 등록되지 않아 터널이 필요 없다. 백그라운드 스레드에서 호출할 것.
-    fun routesForPairing(): List<String> =
-        PairingConfig(appContext).load()?.let { SplitTunnel.routesFor(listOf(it.host)) }.orEmpty()
+    // 지금 망에서 터널이 맡을 주소(SplitTunnel.routesFor) — 비어 있으면 PC와 같은 대역에서
+    // 실제로 PC에 닿거나(집 안) PC가 등록되지 않아 터널이 필요 없다. 같은 대역인데 안 닿으면
+    // (같은 대역을 쓰는 외부 와이파이, 또는 집 안인데 PC가 꺼져 있음) PC 주소만 터널로 보낸다 —
+    // 집 안이었다면 PC가 켜진 뒤 refreshForNetwork가 터널을 내린다. 백그라운드 스레드에서 호출할 것.
+    fun routesForPairing(): List<String> {
+        val pairing = PairingConfig(appContext).load() ?: return emptyList()
+        val port = pairing.port.toIntOrNull() ?: 0
+        return SplitTunnel.routesFor(listOf(pairing.host)) { addr ->
+            NetworkProbe.isReachableOnLocalNetwork(appContext, addr, port)
+        }
+    }
 
     // 터널은 PC 대역만 맡는다(SplitTunnel) — 집 안이라 맡을 주소가 없으면 올리지 않고 false.
     fun bringUp(): Boolean = synchronized(lock) {

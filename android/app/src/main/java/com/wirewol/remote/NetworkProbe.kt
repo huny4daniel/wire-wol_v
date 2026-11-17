@@ -1,5 +1,10 @@
 package com.wirewol.remote
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.Socket
 
@@ -25,4 +30,40 @@ object NetworkProbe {
             false
         }
     }
+
+    /**
+     * 터널이 켜져 있어도 터널을 거치지 않고, addr가 속한 대역에 직접 붙어 있는 망(보통
+     * 와이파이)으로만 연결을 찔러본다 — "PC와 같은 대역이지만 실제로 집 안인가"를 가릴 때
+     * 쓴다(외부 와이파이도 공유기 기본 대역이 같으면 대역만으로는 구분이 안 된다). 그런
+     * 망이 없으면 false.
+     */
+    fun isReachableOnLocalNetwork(context: Context, addr: Inet4Address, port: Int, timeoutMs: Int = TIMEOUT_MS): Boolean {
+        if (port <= 0) return false
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        val network = localNetworkFor(cm, addr) ?: return false
+        return try {
+            network.socketFactory.createSocket().use { socket ->
+                socket.connect(InetSocketAddress(addr, port), timeoutMs)
+                true
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun localNetworkFor(cm: ConnectivityManager, addr: Inet4Address): Network? {
+        val target = toInt(addr)
+        @Suppress("DEPRECATION")
+        return cm.allNetworks.firstOrNull { network ->
+            val caps = cm.getNetworkCapabilities(network)
+            if (caps == null || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) return@firstOrNull false
+            cm.getLinkProperties(network)?.linkAddresses.orEmpty().any { la ->
+                val local = la.address as? Inet4Address ?: return@any false
+                val mask = if (la.prefixLength <= 0) 0 else -1 shl (32 - la.prefixLength)
+                ((toInt(local) xor target) and mask) == 0
+            }
+        }
+    }
+
+    private fun toInt(a: Inet4Address): Int = a.address.fold(0) { n, b -> (n shl 8) or (b.toInt() and 0xFF) }
 }

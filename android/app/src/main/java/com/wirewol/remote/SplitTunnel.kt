@@ -37,13 +37,14 @@ object SplitTunnel {
     }
 
     /**
-     * 터널이 맡을 주소(AllowedIPs) — PC의 사설 /24 대역(지정 브로드캐스트 WOL 포함). 폰이 이미
-     * 그 대역 안에 있으면 빈 목록이다: 집 안이면 PC에 바로 닿고, 우연히 같은 대역을 쓰는 다른
-     * 망이면 터널로 보내 봐야 그 망의 기기와 충돌만 한다 — 그래서 집 안에서는 PC가 꺼져 있어도
-     * 터널을 켜지 않는다. 대역이 폰의 망과 겹치면 PC 주소(/32)만 넣는다. 해석 못 한 주소는
-     * 건너뛴다. 이름 풀이가 있으니 백그라운드 스레드에서 호출할 것.
+     * 터널이 맡을 주소(AllowedIPs) — PC의 사설 /24 대역(지정 브로드캐스트 WOL 포함). 대역이 폰의
+     * 망과 겹치면 PC 주소(/32)만 넣는다. 폰이 이미 PC와 같은 대역 안에 있으면 대역만으로는 집
+     * 안인지 알 수 없다(외부 와이파이도 공유기 기본 대역이 같은 경우가 흔하다) — isHome으로
+     * 실제로 그 망에서 PC에 닿는지 물어 닿으면 건너뛰고, 아니면 PC 주소(/32)만 터널로 보낸다
+     * (그 망의 다른 기기에는 영향 없음). 해석 못 한 주소는 건너뛴다. 이름 풀이·탐지가 있으니
+     * 백그라운드 스레드에서 호출할 것.
      */
-    fun routesFor(hosts: List<String>): List<String> {
+    fun routesFor(hosts: List<String>, isHome: (Inet4Address) -> Boolean): List<String> {
         val local = localNets()
         val routes = sortedSetOf<String>()
         for (host in hosts) {
@@ -53,7 +54,10 @@ object SplitTunnel {
                 null
             } ?: continue
             val ip = toInt(addr)
-            if (local.any { ((ip xor it.addr) and it.mask) == 0 }) continue
+            if (local.any { ((ip xor it.addr) and it.mask) == 0 }) {
+                if (!isHome(addr)) routes += "${format(ip)}/32"
+                continue
+            }
             val net24 = ip and 0xFFFFFF00.toInt()
             val overlaps = local.any { (it.addr and 0xFFFFFF00.toInt()) == net24 }
             routes += if (isPrivate(ip) && !overlaps) "${format(net24)}/24" else "${format(ip)}/32"

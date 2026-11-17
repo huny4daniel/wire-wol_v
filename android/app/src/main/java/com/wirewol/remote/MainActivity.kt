@@ -336,7 +336,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         Thread {
-            // PC와 같은 대역(집 안 — PC가 꺼져 있어도 판단된다)이면 터널이 필요 없다.
+            // PC와 같은 대역에서 실제로 PC에 닿으면(집 안) 터널이 필요 없다.
             val reachable = wireGuard.routesForPairing().isEmpty() ||
                 NetworkProbe.isReachableDirectly(pairing.host, pairing.port.toIntOrNull() ?: 0)
             handler.post {
